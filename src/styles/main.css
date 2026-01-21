@@ -217,7 +217,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px var(--main-panel-padding) 8px;
+  padding: 10px calc(var(--main-panel-padding) + var(--titlebar-right-inset, 0px))
+    8px var(--main-panel-padding);
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-topbar);
   -webkit-app-region: drag;
@@ -253,6 +254,7 @@
     var(--topbar-compact-padding, 16px)
     + var(--titlebar-toggle-size, 28px)
     + var(--titlebar-toggle-side-gap, 12px)
+    + var(--titlebar-right-inset, 0px)
   );
 }
 
@@ -261,6 +263,7 @@
     var(--main-panel-padding)
     + var(--titlebar-toggle-size, 28px)
     + var(--titlebar-toggle-side-gap, 12px)
+    + var(--titlebar-right-inset, 0px)
   );
 }
 

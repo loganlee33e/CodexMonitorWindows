@@ -97,6 +97,7 @@ import { usePanelVisibility } from "./features/layout/hooks/usePanelVisibility";
 import { useTerminalController } from "./features/terminal/hooks/useTerminalController";
 import { playNotificationSound } from "./utils/notificationSounds";
 import { shouldApplyCommitMessage } from "./utils/commitMessage";
+import { getPlatformClassName } from "./utils/platform";
 import {
   pickWorkspacePath,
   generateCommitMessage,
@@ -1678,7 +1679,10 @@ function MainApp() {
     onDebug: addDebugEntry,
   });
   const isDefaultScale = Math.abs(uiScale - 1) < 0.001;
-  const appClassName = `app ${isCompact ? "layout-compact" : "layout-desktop"}${
+  const platformClassName = useMemo(() => getPlatformClassName(), []);
+  const appClassName = `app ${platformClassName} ${
+    isCompact ? "layout-compact" : "layout-desktop"
+  }${
     isPhone ? " layout-phone" : ""
   }${isTablet ? " layout-tablet" : ""}${
     reduceTransparency ? " reduced-transparency" : ""

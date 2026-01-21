@@ -6,6 +6,7 @@ import type { BranchInfo, WorkspaceInfo } from "../../../types";
 import type { ReactNode } from "react";
 import { OPEN_APP_STORAGE_KEY, type OpenAppId } from "../constants";
 import { getStoredOpenAppId } from "../utils/openApp";
+import { getPlatform, getRevealLabel } from "../../../utils/platform";
 import cursorIcon from "../../../assets/app-icons/cursor.png";
 import finderIcon from "../../../assets/app-icons/finder.png";
 import antigravityIcon from "../../../assets/app-icons/antigravity.png";
@@ -93,6 +94,8 @@ export function MainHeader({
   const [openAppId, setOpenAppId] = useState<OpenTarget["id"]>(() => (
     getStoredOpenAppId()
   ));
+  const platform = getPlatform();
+  const revealLabel = getRevealLabel(platform);
 
   const recentBranches = branches.slice(0, 12);
   const resolvedWorktreePath = worktreePath ?? workspace.path;
@@ -134,7 +137,7 @@ export function MainHeader({
     },
     {
       id: "finder",
-      label: "Finder",
+      label: platform === "windows" ? "Explorer" : "Finder",
       icon: finderIcon,
       open: async (path) => revealItemInDir(path),
     },
@@ -356,7 +359,7 @@ export function MainHeader({
                       }}
                       data-tauri-drag-region="false"
                     >
-                      Reveal in Finder
+                      {revealLabel}
                     </button>
                   </div>
                 </div>

@@ -1335,6 +1335,11 @@ pub(crate) async fn open_workspace_in(
     path: String,
     app: String,
 ) -> Result<(), String> {
+    open_workspace_in_inner(&path, &app)
+}
+
+#[cfg(target_os = "macos")]
+fn open_workspace_in_inner(path: &str, app: &str) -> Result<(), String> {
     let status = std::process::Command::new("open")
         .arg("-a")
         .arg(app)
@@ -1346,6 +1351,60 @@ pub(crate) async fn open_workspace_in(
     } else {
         Err("Failed to open app".to_string())
     }
+}
+
+#[cfg(target_os = "linux")]
+fn open_workspace_in_inner(path: &str, _app: &str) -> Result<(), String> {
+    let status = std::process::Command::new("xdg-open")
+        .arg(path)
+        .status()
+        .map_err(|error| format!("Failed to open app: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Failed to open app".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn open_workspace_in_inner(path: &str, app: &str) -> Result<(), String> {
+    if let Some((command, args)) = windows_open_command(app, path) {
+        if run_open_command(&command, &args).is_ok() {
+            return Ok(());
+        }
+    }
+    run_open_command(
+        "cmd",
+        &["/C".to_string(), "start".to_string(), "".to_string(), path.to_string()],
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn windows_open_command(app: &str, path: &str) -> Option<(String, Vec<String>)> {
+    match app {
+        "Visual Studio Code" => Some(("code".to_string(), vec![path.to_string()])),
+        "Cursor" => Some(("cursor".to_string(), vec![path.to_string()])),
+        "Zed" => Some(("zed".to_string(), vec![path.to_string()])),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_open_command(command: &str, args: &[String]) -> Result<(), String> {
+    let status = std::process::Command::new(command)
+        .args(args)
+        .status()
+        .map_err(|error| format!("Failed to open app: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Failed to open app".to_string())
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn open_workspace_in_inner(_path: &str, _app: &str) -> Result<(), String> {
+    Err("Open workspace is not supported on this platform.".to_string())
 }
 
 #[cfg(test)]

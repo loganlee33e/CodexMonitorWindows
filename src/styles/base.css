@@ -1,6 +1,6 @@
 :root {
   font-family: "SF Pro Text", "SF Pro Display", -apple-system, "Helvetica Neue",
-    sans-serif;
+    "Segoe UI Variable Text", "Segoe UI", sans-serif;
   color: var(--text-primary);
   background-color: transparent;
   font-synthesis: none;
@@ -17,11 +17,11 @@
   --text-faint: rgba(255, 255, 255, 0.5);
   --text-fainter: rgba(255, 255, 255, 0.45);
   --text-dim: rgba(255, 255, 255, 0.35);
-  --surface-sidebar: rgba(18, 18, 18, 0.35);
-  --surface-topbar: rgba(10, 14, 20, 0.45);
-  --surface-right-panel: rgba(9, 12, 20, 0.4);
-  --surface-composer: rgba(10, 14, 20, 0.45);
-  --surface-messages: rgba(8, 10, 16, 0.45);
+  --surface-sidebar: rgba(18, 18, 18, 0.315);
+  --surface-topbar: rgba(10, 14, 20, 0.405);
+  --surface-right-panel: rgba(9, 12, 20, 0.36);
+  --surface-composer: rgba(10, 14, 20, 0.405);
+  --surface-messages: rgba(8, 10, 16, 0.405);
   --surface-card: rgba(255, 255, 255, 0.04);
   --surface-card-strong: rgba(255, 255, 255, 0.12);
   --surface-card-muted: rgba(255, 255, 255, 0.06);
@@ -55,6 +55,7 @@
   --text-accent: rgba(164, 195, 255, 0.7);
   --shadow-accent: rgba(92, 168, 255, 0.28);
   --titlebar-inset-left: 72px;
+  --titlebar-right-inset: 0px;
   --titlebar-height: 24px;
   --titlebar-toggle-size: 28px;
   --titlebar-toggle-offset: 4px;
@@ -111,11 +112,11 @@
   --text-faint: rgba(17, 20, 28, 0.5);
   --text-fainter: rgba(17, 20, 28, 0.45);
   --text-dim: rgba(17, 20, 28, 0.35);
-  --surface-sidebar: rgba(246, 247, 250, 0.82);
-  --surface-topbar: rgba(250, 251, 253, 0.9);
-  --surface-right-panel: rgba(245, 247, 250, 0.82);
-  --surface-composer: rgba(250, 251, 253, 0.9);
-  --surface-messages: rgba(238, 241, 246, 0.9);
+  --surface-sidebar: rgba(246, 247, 250, 0.738);
+  --surface-topbar: rgba(250, 251, 253, 0.81);
+  --surface-right-panel: rgba(245, 247, 250, 0.738);
+  --surface-composer: rgba(250, 251, 253, 0.81);
+  --surface-messages: rgba(238, 241, 246, 0.81);
   --surface-card: rgba(255, 255, 255, 0.72);
   --surface-card-strong: rgba(255, 255, 255, 0.92);
   --surface-card-muted: rgba(255, 255, 255, 0.7);
@@ -193,11 +194,11 @@
     --text-faint: rgba(17, 20, 28, 0.5);
     --text-fainter: rgba(17, 20, 28, 0.45);
     --text-dim: rgba(17, 20, 28, 0.35);
-    --surface-sidebar: rgba(246, 247, 250, 0.82);
-    --surface-topbar: rgba(250, 251, 253, 0.9);
-    --surface-right-panel: rgba(245, 247, 250, 0.82);
-    --surface-composer: rgba(250, 251, 253, 0.9);
-    --surface-messages: rgba(238, 241, 246, 0.9);
+    --surface-sidebar: rgba(246, 247, 250, 0.738);
+    --surface-topbar: rgba(250, 251, 253, 0.81);
+    --surface-right-panel: rgba(245, 247, 250, 0.738);
+    --surface-composer: rgba(250, 251, 253, 0.81);
+    --surface-messages: rgba(238, 241, 246, 0.81);
     --surface-card: rgba(255, 255, 255, 0.72);
     --surface-card-strong: rgba(255, 255, 255, 0.92);
     --surface-card-muted: rgba(255, 255, 255, 0.7);
@@ -300,6 +301,12 @@ body {
   transition: grid-template-columns 220ms ease;
 }
 
+.app.platform-windows {
+  --titlebar-inset-left: 0px;
+  --titlebar-right-inset: 140px;
+  --titlebar-height: 32px;
+}
+
 .app.ui-scale-default {
   transform: none;
 }
@@ -338,7 +345,7 @@ body {
 }
 
 .titlebar-toggle-right {
-  right: 10px;
+  right: calc(10px + var(--titlebar-right-inset, 0px));
 }
 
 .sidebar-resizer {

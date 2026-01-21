@@ -19,6 +19,11 @@ import {
   Search,
 } from "lucide-react";
 import { PanelTabs, type PanelTabId } from "../../layout/components/PanelTabs";
+import {
+  getPlatform,
+  getRevealLabel,
+  joinPlatformPath,
+} from "../../../utils/platform";
 
 type FileTreeNode = {
   name: string;
@@ -181,6 +186,8 @@ export function FileTreePanel({
   filePanelMode,
   onFilePanelModeChange,
 }: FileTreePanelProps) {
+  const platform = getPlatform();
+  const revealLabel = getRevealLabel(platform);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const hasManualToggle = useRef(false);
@@ -255,12 +262,8 @@ export function FileTreePanel({
     });
   };
 
-  const resolvePath = (relativePath: string) => {
-    const base = workspacePath.endsWith("/")
-      ? workspacePath.slice(0, -1)
-      : workspacePath;
-    return `${base}/${relativePath}`;
-  };
+  const resolvePath = (relativePath: string) =>
+    joinPlatformPath(workspacePath, relativePath, platform);
 
   async function showFileMenu(
     event: MouseEvent<HTMLButtonElement>,
@@ -271,7 +274,7 @@ export function FileTreePanel({
     const menu = await Menu.new({
       items: [
         await MenuItem.new({
-          text: "Reveal in Finder",
+          text: revealLabel,
           action: async () => {
             await revealItemInDir(resolvePath(relativePath));
           },

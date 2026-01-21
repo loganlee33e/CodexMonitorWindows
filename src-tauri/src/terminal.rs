@@ -27,8 +27,50 @@ fn terminal_key(workspace_id: &str, terminal_id: &str) -> String {
     format!("{workspace_id}:{terminal_id}")
 }
 
+#[cfg(windows)]
+fn shell_path() -> String {
+    if let Ok(value) = std::env::var("SystemRoot") {
+        if !value.trim().is_empty() {
+            let candidate = PathBuf::from(value)
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe");
+            if candidate.exists() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    if let Ok(value) = std::env::var("COMSPEC") {
+        if !value.trim().is_empty() {
+            return value;
+        }
+    }
+    "powershell.exe".to_string()
+}
+
+#[cfg(not(windows))]
 fn shell_path() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+}
+
+fn build_shell_command(cwd: &PathBuf) -> CommandBuilder {
+    let shell = shell_path();
+    let mut cmd = CommandBuilder::new(&shell);
+    cmd.cwd(cwd);
+    #[cfg(windows)]
+    {
+        let shell_lower = shell.to_lowercase();
+        if shell_lower.contains("powershell") || shell_lower.ends_with("pwsh.exe") {
+            cmd.arg("-NoLogo");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        cmd.arg("-i");
+        cmd.env("TERM", "xterm-256color");
+    }
+    cmd
 }
 
 fn spawn_terminal_reader(
@@ -102,10 +144,7 @@ pub(crate) async fn terminal_open(
         .openpty(size)
         .map_err(|e| format!("Failed to open pty: {e}"))?;
 
-    let mut cmd = CommandBuilder::new(shell_path());
-    cmd.cwd(cwd);
-    cmd.arg("-i");
-    cmd.env("TERM", "xterm-256color");
+    let mut cmd = build_shell_command(&cwd);
 
     let child = pair
         .slave

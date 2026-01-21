@@ -7,6 +7,14 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { openWorkspaceIn } from "../../../services/tauri";
 import { getStoredOpenAppId } from "../../app/utils/openApp";
 import type { OpenAppId } from "../../app/constants";
+import {
+  getPlatform,
+  getRevealLabel,
+  isAbsolutePath,
+  joinPlatformPath,
+  normalizePathForPlatform,
+  type Platform,
+} from "../../../utils/platform";
 
 type OpenTarget = {
   id: OpenAppId;
@@ -22,16 +30,19 @@ const OPEN_TARGETS: Record<OpenTarget["id"], OpenTarget> = {
   finder: { id: "finder" },
 };
 
-function resolveFilePath(path: string, workspacePath?: string | null) {
+function resolveFilePath(
+  path: string,
+  workspacePath: string | null | undefined,
+  platform: Platform,
+) {
   const trimmed = path.trim();
   if (!workspacePath) {
-    return trimmed;
+    return normalizePathForPlatform(trimmed, platform);
   }
-  if (trimmed.startsWith("/") || trimmed.startsWith("~/")) {
-    return trimmed;
+  if (isAbsolutePath(trimmed, platform)) {
+    return normalizePathForPlatform(trimmed, platform);
   }
-  const base = workspacePath.replace(/\/+$/, "");
-  return `${base}/${trimmed}`;
+  return joinPlatformPath(workspacePath, trimmed, platform);
 }
 
 function stripLineSuffix(path: string) {
@@ -39,26 +50,17 @@ function stripLineSuffix(path: string) {
   return match ? match[1] : path;
 }
 
-function revealLabel() {
-  const platform =
-    (navigator as Navigator & { userAgentData?: { platform?: string } })
-      .userAgentData?.platform ?? navigator.platform ?? "";
-  const normalized = platform.toLowerCase();
-  if (normalized.includes("mac")) {
-    return "Reveal in Finder";
-  }
-  if (normalized.includes("win")) {
-    return "Show in Explorer";
-  }
-  return "Reveal in File Manager";
-}
-
 export function useFileLinkOpener(workspacePath?: string | null) {
+  const platform = getPlatform();
   const openFileLink = useCallback(
     async (rawPath: string) => {
       const openAppId = getStoredOpenAppId();
       const target = OPEN_TARGETS[openAppId] ?? OPEN_TARGETS.vscode;
-      const resolvedPath = resolveFilePath(stripLineSuffix(rawPath), workspacePath);
+      const resolvedPath = resolveFilePath(
+        stripLineSuffix(rawPath),
+        workspacePath,
+        platform,
+      );
 
       if (target.id === "finder") {
         await revealItemInDir(resolvedPath);
@@ -69,7 +71,7 @@ export function useFileLinkOpener(workspacePath?: string | null) {
         await openWorkspaceIn(resolvedPath, target.appName);
       }
     },
-    [workspacePath],
+    [platform, workspacePath],
   );
 
   const showFileLinkMenu = useCallback(
@@ -78,10 +80,14 @@ export function useFileLinkOpener(workspacePath?: string | null) {
       event.stopPropagation();
       const openAppId = getStoredOpenAppId();
       const target = OPEN_TARGETS[openAppId] ?? OPEN_TARGETS.vscode;
-      const resolvedPath = resolveFilePath(stripLineSuffix(rawPath), workspacePath);
+      const resolvedPath = resolveFilePath(
+        stripLineSuffix(rawPath),
+        workspacePath,
+        platform,
+      );
       const openLabel =
         target.id === "finder"
-          ? revealLabel()
+          ? getRevealLabel(platform)
           : target.appName
             ? `Open in ${target.appName}`
             : "Open Link";
@@ -96,7 +102,7 @@ export function useFileLinkOpener(workspacePath?: string | null) {
           ? []
           : [
               await MenuItem.new({
-                text: revealLabel(),
+                text: getRevealLabel(platform),
                 action: async () => {
                   await revealItemInDir(resolvedPath);
                 },
@@ -127,7 +133,7 @@ export function useFileLinkOpener(workspacePath?: string | null) {
       const position = new LogicalPosition(event.clientX, event.clientY);
       await menu.popup(position, window);
     },
-    [openFileLink, workspacePath],
+    [openFileLink, platform, workspacePath],
   );
 
   return { openFileLink, showFileLinkMenu };
