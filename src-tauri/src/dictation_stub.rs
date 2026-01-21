@@ -6,6 +6,7 @@ use crate::state::AppState;
 const DEFAULT_MODEL_ID: &str = "base";
 const UNSUPPORTED_MESSAGE: &str = "Dictation is not supported on Windows builds.";
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum DictationModelState {
@@ -33,6 +34,7 @@ pub(crate) struct DictationModelStatus {
     pub(crate) path: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum DictationSessionState {
@@ -41,6 +43,7 @@ pub(crate) enum DictationSessionState {
     Processing,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum DictationEvent {

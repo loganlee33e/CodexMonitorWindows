@@ -144,7 +144,7 @@ pub(crate) async fn terminal_open(
         .openpty(size)
         .map_err(|e| format!("Failed to open pty: {e}"))?;
 
-    let mut cmd = build_shell_command(&cwd);
+    let cmd = build_shell_command(&cwd);
 
     let child = pair
         .slave
