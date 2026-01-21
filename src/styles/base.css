@@ -304,9 +304,12 @@ body {
 .app.platform-windows {
   --titlebar-inset-left: 0px;
   --titlebar-right-inset: 140px;
-  --titlebar-height: 32px;
+  --titlebar-height: 0px;
 }
 
+.app.platform-windows .drag-strip {
+  display: none;
+}
 .app.ui-scale-default {
   transform: none;
 }
