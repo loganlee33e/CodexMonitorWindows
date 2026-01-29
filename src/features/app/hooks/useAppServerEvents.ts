@@ -1,5 +1,9 @@
 import { useEffect } from "react";
-import type { AppServerEvent, ApprovalRequest } from "../../../types";
+import type {
+  AppServerEvent,
+  ApprovalRequest,
+  RequestUserInputRequest,
+} from "../../../types";
 import { subscribeAppServerEvents } from "../../../services/events";
 
 type AgentDelta = {
@@ -19,11 +23,13 @@ type AgentCompleted = {
 type AppServerEventHandlers = {
   onWorkspaceConnected?: (workspaceId: string) => void;
   onApprovalRequest?: (request: ApprovalRequest) => void;
+  onRequestUserInput?: (request: RequestUserInputRequest) => void;
   onAgentMessageDelta?: (event: AgentDelta) => void;
   onAgentMessageCompleted?: (event: AgentCompleted) => void;
   onAppServerEvent?: (event: AppServerEvent) => void;
   onTurnStarted?: (workspaceId: string, threadId: string, turnId: string) => void;
   onTurnCompleted?: (workspaceId: string, threadId: string, turnId: string) => void;
+  onContextCompacted?: (workspaceId: string, threadId: string, turnId: string) => void;
   onTurnError?: (
     workspaceId: string,
     threadId: string,
@@ -39,6 +45,7 @@ type AppServerEventHandlers = {
   onItemStarted?: (workspaceId: string, threadId: string, item: Record<string, unknown>) => void;
   onItemCompleted?: (workspaceId: string, threadId: string, item: Record<string, unknown>) => void;
   onReasoningSummaryDelta?: (workspaceId: string, threadId: string, itemId: string, delta: string) => void;
+  onReasoningSummaryBoundary?: (workspaceId: string, threadId: string, itemId: string) => void;
   onReasoningTextDelta?: (workspaceId: string, threadId: string, itemId: string, delta: string) => void;
   onCommandOutputDelta?: (workspaceId: string, threadId: string, itemId: string, delta: string) => void;
   onTerminalInteraction?: (
@@ -73,12 +80,56 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         return;
       }
 
-      if (method.includes("requestApproval") && typeof message.id === "number") {
+      const requestId = message.id;
+      const hasRequestId =
+        typeof requestId === "number" || typeof requestId === "string";
+
+      if (method.includes("requestApproval") && hasRequestId) {
         handlers.onApprovalRequest?.({
           workspace_id,
-          request_id: message.id,
+          request_id: requestId,
           method,
           params: (message.params as Record<string, unknown>) ?? {},
+        });
+        return;
+      }
+
+      if (method === "item/tool/requestUserInput" && hasRequestId) {
+        const params = (message.params as Record<string, unknown>) ?? {};
+        const questionsRaw = Array.isArray(params.questions) ? params.questions : [];
+        const questions = questionsRaw
+          .map((entry) => {
+            const question = entry as Record<string, unknown>;
+            const optionsRaw = Array.isArray(question.options) ? question.options : [];
+            const options = optionsRaw
+              .map((option) => {
+                const record = option as Record<string, unknown>;
+                const label = String(record.label ?? "").trim();
+                const description = String(record.description ?? "").trim();
+                if (!label && !description) {
+                  return null;
+                }
+                return { label, description };
+              })
+              .filter((option): option is { label: string; description: string } => Boolean(option));
+            return {
+              id: String(question.id ?? "").trim(),
+              header: String(question.header ?? ""),
+              question: String(question.question ?? ""),
+              isOther: Boolean(question.isOther ?? question.is_other),
+              options: options.length ? options : undefined,
+            };
+          })
+          .filter((question) => question.id);
+        handlers.onRequestUserInput?.({
+          workspace_id,
+          request_id: requestId,
+          params: {
+            thread_id: String(params.threadId ?? params.thread_id ?? ""),
+            turn_id: String(params.turnId ?? params.turn_id ?? ""),
+            item_id: String(params.itemId ?? params.item_id ?? ""),
+            questions,
+          },
         });
         return;
       }
@@ -137,6 +188,16 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         const turnId = String(turn?.id ?? params.turnId ?? params.turn_id ?? "");
         if (threadId) {
           handlers.onTurnCompleted?.(workspace_id, threadId, turnId);
+        }
+        return;
+      }
+
+      if (method === "thread/compacted") {
+        const params = message.params as Record<string, unknown>;
+        const threadId = String(params.threadId ?? params.thread_id ?? "");
+        const turnId = String(params.turnId ?? params.turn_id ?? "");
+        if (threadId && turnId) {
+          handlers.onContextCompacted?.(workspace_id, threadId, turnId);
         }
         return;
       }
@@ -226,6 +287,16 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         const delta = String(params.delta ?? "");
         if (threadId && itemId && delta) {
           handlers.onReasoningSummaryDelta?.(workspace_id, threadId, itemId, delta);
+        }
+        return;
+      }
+
+      if (method === "item/reasoning/summaryPartAdded") {
+        const params = message.params as Record<string, unknown>;
+        const threadId = String(params.threadId ?? params.thread_id ?? "");
+        const itemId = String(params.itemId ?? params.item_id ?? "");
+        if (threadId && itemId) {
+          handlers.onReasoningSummaryBoundary?.(workspace_id, threadId, itemId);
         }
         return;
       }

@@ -24,6 +24,22 @@ const KEY_LABELS: Record<string, string> = {
   arrowright: "→",
 };
 
+const ACCELERATOR_KEYS: Record<string, string> = {
+  " ": "Space",
+  space: "Space",
+  escape: "Esc",
+  esc: "Esc",
+  enter: "Enter",
+  return: "Enter",
+  tab: "Tab",
+  backspace: "Backspace",
+  delete: "Delete",
+  arrowup: "Up",
+  arrowdown: "Down",
+  arrowleft: "Left",
+  arrowright: "Right",
+};
+
 const MODIFIER_KEYS = new Set(["shift", "control", "alt", "meta"]);
 
 function normalizeKey(key: string) {
@@ -96,7 +112,8 @@ export function buildShortcutValue(event: KeyboardEvent): string | null {
     return null;
   }
   const hasPrimaryModifier = event.metaKey || event.ctrlKey || event.altKey;
-  if (!hasPrimaryModifier) {
+  const allowShiftOnly = event.shiftKey && key === "tab";
+  if (!hasPrimaryModifier && !allowShiftOnly) {
     return null;
   }
   const modifiers = [];
@@ -130,4 +147,44 @@ export function matchesShortcut(event: KeyboardEvent, value: string | null | und
     parsed.alt === event.altKey &&
     parsed.shift === event.shiftKey
   );
+}
+
+export function isMacPlatform(): boolean {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+}
+
+export function getDefaultInterruptShortcut(): string {
+  return isMacPlatform() ? "ctrl+c" : "ctrl+shift+c";
+}
+
+export function toMenuAccelerator(value: string | null | undefined): string | null {
+  const parsed = parseShortcut(value);
+  if (!parsed) {
+    return null;
+  }
+  const parts: string[] = [];
+  if (parsed.meta && parsed.ctrl) {
+    parts.push("Cmd");
+    parts.push("Ctrl");
+  } else if (parsed.meta) {
+    parts.push("CmdOrCtrl");
+  } else if (parsed.ctrl) {
+    parts.push("Ctrl");
+  }
+  if (parsed.alt) {
+    parts.push("Alt");
+  }
+  if (parsed.shift) {
+    parts.push("Shift");
+  }
+  const key =
+    ACCELERATOR_KEYS[parsed.key] ??
+    (parsed.key.length === 1 ? parsed.key.toUpperCase() : parsed.key);
+  if (!key) {
+    return null;
+  }
+  return [...parts, key].join("+");
 }

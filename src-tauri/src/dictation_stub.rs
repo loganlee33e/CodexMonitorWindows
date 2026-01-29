@@ -161,6 +161,11 @@ pub(crate) async fn dictation_start(
 }
 
 #[tauri::command]
+pub(crate) async fn dictation_request_permission(_app: AppHandle) -> Result<bool, String> {
+    Err(UNSUPPORTED_MESSAGE.to_string())
+}
+
+#[tauri::command]
 pub(crate) async fn dictation_stop(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -191,4 +196,3 @@ pub(crate) async fn dictation_cancel(
     );
     Ok(DictationSessionState::Idle)
 }
-

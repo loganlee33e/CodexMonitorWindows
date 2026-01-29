@@ -21,6 +21,14 @@ import type {
   ReviewTarget,
 } from "../types";
 
+function isMissingTauriInvokeError(error: unknown) {
+  return (
+    error instanceof TypeError &&
+    (error.message.includes("reading 'invoke'") ||
+      error.message.includes("reading \"invoke\""))
+  );
+}
+
 export async function pickWorkspacePath(): Promise<string | null> {
   const selection = await open({ directory: true, multiple: false });
   if (!selection || Array.isArray(selection)) {
@@ -46,7 +54,79 @@ export async function pickImageFiles(): Promise<string[]> {
 }
 
 export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
-  return invoke<WorkspaceInfo[]>("list_workspaces");
+  try {
+    return await invoke<WorkspaceInfo[]>("list_workspaces");
+  } catch (error) {
+    if (isMissingTauriInvokeError(error)) {
+      // In non-Tauri environments (e.g., Electron/web previews), the invoke
+      // bridge may be missing. Treat this as "no workspaces" instead of crashing.
+      console.warn("Tauri invoke bridge unavailable; returning empty workspaces list.");
+      return [];
+    }
+    throw error;
+  }
+}
+
+export async function getCodexConfigPath(): Promise<string> {
+  return invoke<string>("get_codex_config_path");
+}
+
+export type TextFileResponse = {
+  exists: boolean;
+  content: string;
+  truncated: boolean;
+};
+
+export type GlobalAgentsResponse = TextFileResponse;
+export type GlobalCodexConfigResponse = TextFileResponse;
+export type AgentMdResponse = TextFileResponse;
+
+type FileScope = "workspace" | "global";
+type FileKind = "agents" | "config";
+
+async function fileRead(
+  scope: FileScope,
+  kind: FileKind,
+  workspaceId?: string,
+): Promise<TextFileResponse> {
+  return invoke<TextFileResponse>("file_read", { scope, kind, workspaceId });
+}
+
+async function fileWrite(
+  scope: FileScope,
+  kind: FileKind,
+  content: string,
+  workspaceId?: string,
+): Promise<void> {
+  return invoke("file_write", { scope, kind, workspaceId, content });
+}
+
+export async function readGlobalAgentsMd(): Promise<GlobalAgentsResponse> {
+  return fileRead("global", "agents");
+}
+
+export async function writeGlobalAgentsMd(content: string): Promise<void> {
+  return fileWrite("global", "agents", content);
+}
+
+export async function readGlobalCodexConfigToml(): Promise<GlobalCodexConfigResponse> {
+  return fileRead("global", "config");
+}
+
+export async function writeGlobalCodexConfigToml(content: string): Promise<void> {
+  return fileWrite("global", "config", content);
+}
+
+export async function getConfigModel(workspaceId: string): Promise<string | null> {
+  const response = await invoke<{ model?: string | null }>("get_config_model", {
+    workspaceId,
+  });
+  const model = response?.model;
+  if (typeof model !== "string") {
+    return null;
+  }
+  const trimmed = model.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export async function addWorkspace(
@@ -54,6 +134,10 @@ export async function addWorkspace(
   codex_bin: string | null,
 ): Promise<WorkspaceInfo> {
   return invoke<WorkspaceInfo>("add_workspace", { path, codex_bin });
+}
+
+export async function isWorkspacePathDir(path: string): Promise<boolean> {
+  return invoke<boolean>("is_workspace_path_dir", { path });
 }
 
 export async function addClone(
@@ -73,6 +157,21 @@ export async function addWorktree(
   branch: string,
 ): Promise<WorkspaceInfo> {
   return invoke<WorkspaceInfo>("add_worktree", { parentId, branch });
+}
+
+export type WorktreeSetupStatus = {
+  shouldRun: boolean;
+  script: string | null;
+};
+
+export async function getWorktreeSetupStatus(
+  workspaceId: string,
+): Promise<WorktreeSetupStatus> {
+  return invoke<WorktreeSetupStatus>("worktree_setup_status", { workspaceId });
+}
+
+export async function markWorktreeSetupRan(workspaceId: string): Promise<void> {
+  return invoke("worktree_setup_mark_ran", { workspaceId });
 }
 
 export async function updateWorkspaceSettings(
@@ -116,8 +215,24 @@ export async function applyWorktreeChanges(workspaceId: string): Promise<void> {
   return invoke("apply_worktree_changes", { workspaceId });
 }
 
-export async function openWorkspaceIn(path: string, app: string): Promise<void> {
-  return invoke("open_workspace_in", { path, app });
+export async function openWorkspaceIn(
+  path: string,
+  options: {
+    appName?: string | null;
+    command?: string | null;
+    args?: string[];
+  },
+): Promise<void> {
+  return invoke("open_workspace_in", {
+    path,
+    app: options.appName ?? null,
+    command: options.command ?? null,
+    args: options.args ?? [],
+  });
+}
+
+export async function getOpenAppIcon(appName: string): Promise<string | null> {
+  return invoke<string | null>("get_open_app_icon", { appName });
 }
 
 export async function connectWorkspace(id: string): Promise<void> {
@@ -140,7 +255,7 @@ export async function sendUserMessage(
     collaborationMode?: Record<string, unknown> | null;
   },
 ) {
-  return invoke("send_user_message", {
+  const payload: Record<string, unknown> = {
     workspaceId,
     threadId,
     text,
@@ -148,8 +263,11 @@ export async function sendUserMessage(
     effort: options?.effort ?? null,
     accessMode: options?.accessMode ?? null,
     images: options?.images ?? null,
-    collaborationMode: options?.collaborationMode ?? null,
-  });
+  };
+  if (options?.collaborationMode) {
+    payload.collaborationMode = options.collaborationMode;
+  }
+  return invoke("send_user_message", payload);
 }
 
 export async function interruptTurn(
@@ -175,13 +293,25 @@ export async function startReview(
 
 export async function respondToServerRequest(
   workspaceId: string,
-  requestId: number,
+  requestId: number | string,
   decision: "accept" | "decline",
 ) {
   return invoke("respond_to_server_request", {
     workspaceId,
     requestId,
     result: { decision },
+  });
+}
+
+export async function respondToUserInputRequest(
+  workspaceId: string,
+  requestId: number | string,
+  answers: Record<string, { answers: string[] }>,
+) {
+  return invoke("respond_to_server_request", {
+    workspaceId,
+    requestId,
+    result: { answers },
   });
 }
 
@@ -320,6 +450,13 @@ export async function getModelList(workspaceId: string) {
   return invoke<any>("model_list", { workspaceId });
 }
 
+export async function generateRunMetadata(workspaceId: string, prompt: string) {
+  return invoke<{ title: string; worktreeName: string }>("generate_run_metadata", {
+    workspaceId,
+    prompt,
+  });
+}
+
 export async function getCollaborationModes(workspaceId: string) {
   return invoke<any>("collaboration_mode_list", { workspaceId });
 }
@@ -340,8 +477,8 @@ export async function getWorkspacePromptsDir(workspaceId: string) {
   return invoke<string>("prompts_workspace_dir", { workspaceId });
 }
 
-export async function getGlobalPromptsDir() {
-  return invoke<string>("prompts_global_dir");
+export async function getGlobalPromptsDir(workspaceId: string) {
+  return invoke<string>("prompts_global_dir", { workspaceId });
 }
 
 export async function createPrompt(
@@ -407,14 +544,44 @@ export async function updateAppSettings(settings: AppSettings): Promise<AppSetti
   return invoke<AppSettings>("update_app_settings", { settings });
 }
 
+type MenuAcceleratorUpdate = {
+  id: string;
+  accelerator: string | null;
+};
+
+export async function setMenuAccelerators(
+  updates: MenuAcceleratorUpdate[],
+): Promise<void> {
+  return invoke("menu_set_accelerators", { updates });
+}
+
 export async function runCodexDoctor(
   codexBin: string | null,
+  codexArgs: string | null,
 ): Promise<CodexDoctorResult> {
-  return invoke<CodexDoctorResult>("codex_doctor", { codexBin });
+  return invoke<CodexDoctorResult>("codex_doctor", { codexBin, codexArgs });
 }
 
 export async function getWorkspaceFiles(workspaceId: string) {
   return invoke<string[]>("list_workspace_files", { workspaceId });
+}
+
+export async function readWorkspaceFile(
+  workspaceId: string,
+  path: string,
+): Promise<{ content: string; truncated: boolean }> {
+  return invoke<{ content: string; truncated: boolean }>("read_workspace_file", {
+    workspaceId,
+    path,
+  });
+}
+
+export async function readAgentMd(workspaceId: string): Promise<AgentMdResponse> {
+  return fileRead("workspace", "agents", workspaceId);
+}
+
+export async function writeAgentMd(workspaceId: string, content: string): Promise<void> {
+  return fileWrite("workspace", "agents", content, workspaceId);
 }
 
 export async function listGitBranches(workspaceId: string) {
@@ -473,6 +640,10 @@ export async function startDictation(
   preferredLanguage: string | null,
 ): Promise<DictationSessionState> {
   return invoke("dictation_start", { preferredLanguage });
+}
+
+export async function requestDictationPermission(): Promise<boolean> {
+  return invoke("dictation_request_permission");
 }
 
 export async function stopDictation(): Promise<DictationSessionState> {

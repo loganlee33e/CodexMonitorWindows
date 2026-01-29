@@ -5,8 +5,11 @@
   background-color: transparent;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
   color-scheme: light dark;
+  --ui-font-family: "SF Pro Text", "SF Pro Display", -apple-system, "Helvetica Neue",
+    sans-serif;
+  --code-font-family: "SF Mono", "SFMono-Regular", Menlo, Monaco, monospace;
+  --code-font-size: 11px;
   --text-primary: #e6e7ea;
   --text-strong: #ffffff;
   --text-emphasis: rgba(255, 255, 255, 0.9);
@@ -17,11 +20,12 @@
   --text-faint: rgba(255, 255, 255, 0.5);
   --text-fainter: rgba(255, 255, 255, 0.45);
   --text-dim: rgba(255, 255, 255, 0.35);
-  --surface-sidebar: rgba(18, 18, 18, 0.315);
-  --surface-topbar: rgba(10, 14, 20, 0.405);
-  --surface-right-panel: rgba(9, 12, 20, 0.36);
-  --surface-composer: rgba(10, 14, 20, 0.405);
-  --surface-messages: rgba(8, 10, 16, 0.405);
+  --surface-sidebar: rgba(18, 18, 18, 0.5);
+  --surface-sidebar-opaque: rgb(18, 18, 18);
+  --surface-topbar: rgba(10, 14, 20, 0.45);
+  --surface-right-panel: rgba(9, 12, 20, 0.4);
+  --surface-composer: rgba(10, 14, 20, 0.45);
+  --surface-messages: rgba(8, 10, 16, 0.45);
   --surface-card: rgba(255, 255, 255, 0.04);
   --surface-card-strong: rgba(255, 255, 255, 0.12);
   --surface-card-muted: rgba(255, 255, 255, 0.06);
@@ -53,6 +57,7 @@
   --border-accent: rgba(100, 200, 255, 0.6);
   --border-accent-soft: rgba(100, 200, 255, 0.3);
   --text-accent: rgba(164, 195, 255, 0.7);
+  --message-link-color: rgba(196, 154, 255, 0.96);
   --shadow-accent: rgba(92, 168, 255, 0.28);
   --titlebar-inset-left: 72px;
   --titlebar-right-inset: 0px;
@@ -77,6 +82,7 @@
 
 .app.reduced-transparency {
   --surface-sidebar: rgba(18, 18, 18, 0.92);
+  --surface-sidebar-opaque: rgb(18, 18, 18);
   --surface-topbar: rgba(10, 14, 20, 0.94);
   --surface-right-panel: rgba(9, 12, 20, 0.92);
   --surface-composer: rgba(10, 14, 20, 0.94);
@@ -112,11 +118,12 @@
   --text-faint: rgba(17, 20, 28, 0.5);
   --text-fainter: rgba(17, 20, 28, 0.45);
   --text-dim: rgba(17, 20, 28, 0.35);
-  --surface-sidebar: rgba(246, 247, 250, 0.738);
-  --surface-topbar: rgba(250, 251, 253, 0.81);
-  --surface-right-panel: rgba(245, 247, 250, 0.738);
-  --surface-composer: rgba(250, 251, 253, 0.81);
-  --surface-messages: rgba(238, 241, 246, 0.81);
+  --surface-sidebar: rgba(246, 247, 250, 0.82);
+  --surface-sidebar-opaque: rgb(246, 247, 250);
+  --surface-topbar: rgba(250, 251, 253, 0.9);
+  --surface-right-panel: rgba(245, 247, 250, 0.82);
+  --surface-composer: rgba(250, 251, 253, 0.9);
+  --surface-messages: rgba(238, 241, 246, 0.9);
   --surface-card: rgba(255, 255, 255, 0.72);
   --surface-card-strong: rgba(255, 255, 255, 0.92);
   --surface-card-muted: rgba(255, 255, 255, 0.7);
@@ -148,6 +155,7 @@
   --border-accent: rgba(77, 153, 255, 0.5);
   --border-accent-soft: rgba(77, 153, 255, 0.28);
   --text-accent: rgba(45, 93, 170, 0.7);
+  --message-link-color: rgba(109, 40, 217, 1);
   --shadow-accent: rgba(90, 140, 210, 0.18);
   --status-success: rgba(30, 155, 110, 0.9);
   --status-warning: rgba(215, 120, 20, 0.9);
@@ -158,6 +166,7 @@
 
 :root[data-theme="light"] .app.reduced-transparency {
   --surface-sidebar: rgba(240, 242, 247, 0.98);
+  --surface-sidebar-opaque: rgb(240, 242, 247);
   --surface-topbar: rgba(244, 246, 250, 0.98);
   --surface-right-panel: rgba(242, 244, 248, 0.98);
   --surface-composer: rgba(244, 246, 250, 0.98);
@@ -194,11 +203,12 @@
     --text-faint: rgba(17, 20, 28, 0.5);
     --text-fainter: rgba(17, 20, 28, 0.45);
     --text-dim: rgba(17, 20, 28, 0.35);
-    --surface-sidebar: rgba(246, 247, 250, 0.738);
-    --surface-topbar: rgba(250, 251, 253, 0.81);
-    --surface-right-panel: rgba(245, 247, 250, 0.738);
-    --surface-composer: rgba(250, 251, 253, 0.81);
-    --surface-messages: rgba(238, 241, 246, 0.81);
+    --surface-sidebar: rgba(246, 247, 250, 0.82);
+    --surface-sidebar-opaque: rgb(246, 247, 250);
+    --surface-topbar: rgba(250, 251, 253, 0.9);
+    --surface-right-panel: rgba(245, 247, 250, 0.82);
+    --surface-composer: rgba(250, 251, 253, 0.9);
+    --surface-messages: rgba(238, 241, 246, 0.9);
     --surface-card: rgba(255, 255, 255, 0.72);
     --surface-card-strong: rgba(255, 255, 255, 0.92);
     --surface-card-muted: rgba(255, 255, 255, 0.7);
@@ -230,6 +240,7 @@
     --border-accent: rgba(77, 153, 255, 0.5);
     --border-accent-soft: rgba(77, 153, 255, 0.28);
     --text-accent: rgba(45, 93, 170, 0.7);
+    --message-link-color: rgba(109, 40, 217, 1);
     --shadow-accent: rgba(90, 140, 210, 0.18);
     --status-success: rgba(30, 155, 110, 0.9);
     --status-warning: rgba(215, 120, 20, 0.9);
@@ -240,6 +251,7 @@
 
   :root:not([data-theme]) .app.reduced-transparency {
     --surface-sidebar: rgba(240, 242, 247, 0.98);
+    --surface-sidebar-opaque: rgb(240, 242, 247);
     --surface-topbar: rgba(244, 246, 250, 0.98);
     --surface-right-panel: rgba(242, 244, 248, 0.98);
     --surface-composer: rgba(244, 246, 250, 0.98);
@@ -287,18 +299,17 @@ body {
 }
 
 .app {
-  height: calc(100vh / var(--ui-scale, 1));
-  width: calc(100vw / var(--ui-scale, 1));
+  height: 100vh;
+  width: 100vw;
   display: grid;
   grid-template-columns: var(--sidebar-width, 280px) 1fr;
   background: transparent;
   border-radius: 0;
   overflow: hidden;
   position: relative;
-  transform: scale(var(--ui-scale, 1));
-  transform-origin: top left;
   --main-topbar-height: 44px;
   transition: grid-template-columns 220ms ease;
+  font-family: var(--ui-font-family);
 }
 
 .app.platform-windows {
@@ -310,6 +321,7 @@ body {
 .app.platform-windows .drag-strip {
   display: none;
 }
+
 .app.ui-scale-default {
   transform: none;
 }

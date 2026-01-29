@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import type { AppServerEvent } from "../types";
 import {
   subscribeAppServerEvents,
+  subscribeMenuCycleCollaborationMode,
+  subscribeMenuCycleModel,
   subscribeMenuNewAgent,
   subscribeTerminalOutput,
 } from "./events";
@@ -63,6 +65,52 @@ describe("events subscriptions", () => {
     resolveListener(unlisten);
     await Promise.resolve();
     expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers menu events to subscribers", async () => {
+    let listener: EventCallback<void> = () => {};
+    const unlisten = vi.fn();
+
+    vi.mocked(listen).mockImplementation((_event, handler) => {
+      listener = handler as EventCallback<void>;
+      return Promise.resolve(unlisten);
+    });
+
+    const onEvent = vi.fn();
+    const cleanup = subscribeMenuCycleModel(onEvent);
+
+    const event: Event<void> = {
+      event: "menu-composer-cycle-model",
+      id: 1,
+      payload: undefined,
+    };
+    listener(event);
+    expect(onEvent).toHaveBeenCalledTimes(1);
+
+    cleanup();
+  });
+
+  it("delivers collaboration cycle menu events to subscribers", async () => {
+    let listener: EventCallback<void> = () => {};
+    const unlisten = vi.fn();
+
+    vi.mocked(listen).mockImplementation((_event, handler) => {
+      listener = handler as EventCallback<void>;
+      return Promise.resolve(unlisten);
+    });
+
+    const onEvent = vi.fn();
+    const cleanup = subscribeMenuCycleCollaborationMode(onEvent);
+
+    const event: Event<void> = {
+      event: "menu-composer-cycle-collaboration",
+      id: 1,
+      payload: undefined,
+    };
+    listener(event);
+    expect(onEvent).toHaveBeenCalledTimes(1);
+
+    cleanup();
   });
 
   it("reports listen errors through options", async () => {

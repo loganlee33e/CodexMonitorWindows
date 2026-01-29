@@ -4,9 +4,10 @@ import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import * as Sentry from "@sentry/react";
 import { openWorkspaceIn } from "../../../services/tauri";
-import { getStoredOpenAppId } from "../../app/utils/openApp";
-import type { OpenAppId } from "../../app/constants";
+import { pushErrorToast } from "../../../services/toasts";
+import type { OpenAppTarget } from "../../../types";
 import {
   getPlatform,
   getRevealLabel,
@@ -17,17 +18,21 @@ import {
 } from "../../../utils/platform";
 
 type OpenTarget = {
-  id: OpenAppId;
-  appName?: string;
+  id: string;
+  label: string;
+  appName?: string | null;
+  kind: OpenAppTarget["kind"];
+  command?: string | null;
+  args: string[];
 };
 
-const OPEN_TARGETS: Record<OpenTarget["id"], OpenTarget> = {
-  vscode: { id: "vscode", appName: "Visual Studio Code" },
-  cursor: { id: "cursor", appName: "Cursor" },
-  zed: { id: "zed", appName: "Zed" },
-  ghostty: { id: "ghostty", appName: "Ghostty" },
-  antigravity: { id: "antigravity", appName: "Antigravity" },
-  finder: { id: "finder" },
+const DEFAULT_OPEN_TARGET: OpenTarget = {
+  id: "vscode",
+  label: "VS Code",
+  appName: "Visual Studio Code",
+  kind: "app",
+  command: null,
+  args: [],
 };
 
 function resolveFilePath(
@@ -50,47 +55,109 @@ function stripLineSuffix(path: string) {
   return match ? match[1] : path;
 }
 
-export function useFileLinkOpener(workspacePath?: string | null) {
+export function useFileLinkOpener(
+  workspacePath: string | null,
+  openTargets: OpenAppTarget[],
+  selectedOpenAppId: string,
+) {
   const platform = getPlatform();
+  const reportOpenError = useCallback(
+    (error: unknown, context: Record<string, string | null>) => {
+      const message = error instanceof Error ? error.message : String(error);
+      Sentry.captureException(
+        error instanceof Error ? error : new Error(message),
+        {
+          tags: {
+            feature: "file-link-open",
+          },
+          extra: context,
+        },
+      );
+      pushErrorToast({
+        title: "Couldn't open file",
+        message,
+      });
+      console.warn("Failed to open file link", { message, ...context });
+    },
+    [],
+  );
+
   const openFileLink = useCallback(
     async (rawPath: string) => {
-      const openAppId = getStoredOpenAppId();
-      const target = OPEN_TARGETS[openAppId] ?? OPEN_TARGETS.vscode;
+      const target = {
+        ...DEFAULT_OPEN_TARGET,
+        ...(openTargets.find((entry) => entry.id === selectedOpenAppId) ??
+          openTargets[0]),
+      };
       const resolvedPath = resolveFilePath(
         stripLineSuffix(rawPath),
         workspacePath,
         platform,
       );
 
-      if (target.id === "finder") {
-        await revealItemInDir(resolvedPath);
-        return;
-      }
+      try {
+        if (target.kind === "finder") {
+          await revealItemInDir(resolvedPath);
+          return;
+        }
 
-      if (target.appName) {
-        await openWorkspaceIn(resolvedPath, target.appName);
+        if (target.kind === "command") {
+          if (!target.command) {
+            return;
+          }
+          await openWorkspaceIn(resolvedPath, {
+            command: target.command,
+            args: target.args,
+          });
+          return;
+        }
+
+        const appName = (target.appName || target.label || "").trim();
+        if (!appName) {
+          return;
+        }
+        await openWorkspaceIn(resolvedPath, {
+          appName,
+          args: target.args,
+        });
+      } catch (error) {
+        reportOpenError(error, {
+          rawPath,
+          resolvedPath,
+          workspacePath,
+          targetId: target.id,
+          targetKind: target.kind,
+          targetAppName: target.appName ?? null,
+          targetCommand: target.command ?? null,
+        });
       }
     },
-    [platform, workspacePath],
+    [openTargets, platform, reportOpenError, selectedOpenAppId, workspacePath],
   );
 
   const showFileLinkMenu = useCallback(
     async (event: MouseEvent, rawPath: string) => {
       event.preventDefault();
       event.stopPropagation();
-      const openAppId = getStoredOpenAppId();
-      const target = OPEN_TARGETS[openAppId] ?? OPEN_TARGETS.vscode;
+      const target = {
+        ...DEFAULT_OPEN_TARGET,
+        ...(openTargets.find((entry) => entry.id === selectedOpenAppId) ??
+          openTargets[0]),
+      };
       const resolvedPath = resolveFilePath(
         stripLineSuffix(rawPath),
         workspacePath,
         platform,
       );
+      const appName = (target.appName || target.label || "").trim();
       const openLabel =
-        target.id === "finder"
+        target.kind === "finder"
           ? getRevealLabel(platform)
-          : target.appName
-            ? `Open in ${target.appName}`
-            : "Open Link";
+          : target.kind === "command"
+            ? `Open in ${target.label}`
+            : appName
+              ? `Open in ${appName}`
+              : "Open Link";
       const items = [
         await MenuItem.new({
           text: openLabel,
@@ -98,13 +165,25 @@ export function useFileLinkOpener(workspacePath?: string | null) {
             await openFileLink(rawPath);
           },
         }),
-        ...(target.id === "finder"
+        ...(target.kind === "finder"
           ? []
           : [
               await MenuItem.new({
                 text: getRevealLabel(platform),
                 action: async () => {
-                  await revealItemInDir(resolvedPath);
+                  try {
+                    await revealItemInDir(resolvedPath);
+                  } catch (error) {
+                    reportOpenError(error, {
+                      rawPath,
+                      resolvedPath,
+                      workspacePath,
+                      targetId: target.id,
+                      targetKind: "finder",
+                      targetAppName: null,
+                      targetCommand: null,
+                    });
+                  }
                 },
               }),
             ]),
@@ -133,7 +212,14 @@ export function useFileLinkOpener(workspacePath?: string | null) {
       const position = new LogicalPosition(event.clientX, event.clientY);
       await menu.popup(position, window);
     },
-    [openFileLink, platform, workspacePath],
+    [
+      openFileLink,
+      openTargets,
+      platform,
+      reportOpenError,
+      selectedOpenAppId,
+      workspacePath,
+    ],
   );
 
   return { openFileLink, showFileLinkMenu };

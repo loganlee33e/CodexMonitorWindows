@@ -48,7 +48,10 @@ describe("useAppServerEvents", () => {
       onAppServerEvent: vi.fn(),
       onWorkspaceConnected: vi.fn(),
       onAgentMessageDelta: vi.fn(),
+      onReasoningSummaryBoundary: vi.fn(),
+      onContextCompacted: vi.fn(),
       onApprovalRequest: vi.fn(),
+      onRequestUserInput: vi.fn(),
       onItemCompleted: vi.fn(),
       onAgentMessageCompleted: vi.fn(),
     };
@@ -81,6 +84,36 @@ describe("useAppServerEvents", () => {
       listener?.({
         workspace_id: "ws-1",
         message: {
+          method: "item/reasoning/summaryPartAdded",
+          params: { threadId: "thread-1", itemId: "reasoning-1", summaryIndex: 1 },
+        },
+      });
+    });
+    expect(handlers.onReasoningSummaryBoundary).toHaveBeenCalledWith(
+      "ws-1",
+      "thread-1",
+      "reasoning-1",
+    );
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-1",
+        message: {
+          method: "thread/compacted",
+          params: { threadId: "thread-1", turnId: "turn-7" },
+        },
+      });
+    });
+    expect(handlers.onContextCompacted).toHaveBeenCalledWith(
+      "ws-1",
+      "thread-1",
+      "turn-7",
+    );
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-1",
+        message: {
           method: "workspace/requestApproval",
           id: 7,
           params: { mode: "full" },
@@ -92,6 +125,53 @@ describe("useAppServerEvents", () => {
       request_id: 7,
       method: "workspace/requestApproval",
       params: { mode: "full" },
+    });
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-1",
+        message: {
+          method: "item/tool/requestUserInput",
+          id: 11,
+          params: {
+            thread_id: "thread-1",
+            turn_id: "turn-1",
+            item_id: "call-1",
+            questions: [
+              {
+                id: "confirm_path",
+                header: "Confirm",
+                question: "Proceed?",
+                options: [
+                  { label: "Yes", description: "Continue." },
+                  { label: "No", description: "Stop." },
+                ],
+              },
+            ],
+          },
+        },
+      });
+    });
+    expect(handlers.onRequestUserInput).toHaveBeenCalledWith({
+      workspace_id: "ws-1",
+      request_id: 11,
+      params: {
+        thread_id: "thread-1",
+        turn_id: "turn-1",
+        item_id: "call-1",
+        questions: [
+          {
+            id: "confirm_path",
+            header: "Confirm",
+            question: "Proceed?",
+            isOther: false,
+            options: [
+              { label: "Yes", description: "Continue." },
+              { label: "No", description: "Stop." },
+            ],
+          },
+        ],
+      },
     });
 
     act(() => {
@@ -122,6 +202,75 @@ describe("useAppServerEvents", () => {
       root.unmount();
     });
     expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes request user input questions and options", async () => {
+    const handlers: Handlers = {
+      onRequestUserInput: vi.fn(),
+    };
+    const { root } = await mount(handlers);
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-9",
+        message: {
+          method: "item/tool/requestUserInput",
+          id: 55,
+          params: {
+            threadId: "thread-9",
+            turnId: "turn-9",
+            itemId: "item-9",
+            questions: [
+              {
+                id: "",
+                header: "",
+                question: "",
+                options: [
+                  { label: "", description: "" },
+                  { label: "  ", description: " " },
+                ],
+              },
+              {
+                id: "q-1",
+                header: "",
+                question: "Choose",
+                options: [
+                  { label: "", description: "" },
+                  { label: "Yes", description: "" },
+                  { label: "", description: "No label" },
+                ],
+              },
+            ],
+          },
+        },
+      });
+    });
+
+    expect(handlers.onRequestUserInput).toHaveBeenCalledWith({
+      workspace_id: "ws-9",
+      request_id: 55,
+      params: {
+        thread_id: "thread-9",
+        turn_id: "turn-9",
+        item_id: "item-9",
+        questions: [
+          {
+            id: "q-1",
+            header: "",
+            question: "Choose",
+            isOther: false,
+            options: [
+              { label: "Yes", description: "" },
+              { label: "", description: "No label" },
+            ],
+          },
+        ],
+      },
+    });
+
+    await act(async () => {
+      root.unmount();
+    });
   });
 
   it("ignores delta events missing required fields", async () => {

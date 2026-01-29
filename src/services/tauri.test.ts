@@ -5,10 +5,20 @@ import {
   getGitHubIssues,
   getGitLog,
   getGitStatus,
+  getOpenAppIcon,
+  readGlobalAgentsMd,
+  readGlobalCodexConfigToml,
+  listWorkspaces,
+  openWorkspaceIn,
+  readAgentMd,
   stageGitAll,
   respondToServerRequest,
+  respondToUserInputRequest,
   sendUserMessage,
   startReview,
+  writeGlobalAgentsMd,
+  writeGlobalCodexConfigToml,
+  writeAgentMd,
 } from "./tauri";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -61,6 +71,16 @@ describe("tauri invoke wrappers", () => {
     });
   });
 
+  it("returns an empty list when the Tauri invoke bridge is missing", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockRejectedValueOnce(
+      new TypeError("Cannot read properties of undefined (reading 'invoke')"),
+    );
+
+    await expect(listWorkspaces()).resolves.toEqual([]);
+    expect(invokeMock).toHaveBeenCalledWith("list_workspaces");
+  });
+
   it("applies default limit for git log", async () => {
     const invokeMock = vi.mocked(invoke);
     invokeMock.mockResolvedValueOnce({
@@ -92,6 +112,115 @@ describe("tauri invoke wrappers", () => {
     });
   });
 
+  it("maps openWorkspaceIn options", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({});
+
+    await openWorkspaceIn("/tmp/project", {
+      appName: "Xcode",
+      args: ["--reuse-window"],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("open_workspace_in", {
+      path: "/tmp/project",
+      app: "Xcode",
+      command: null,
+      args: ["--reuse-window"],
+    });
+  });
+
+  it("invokes get_open_app_icon", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce("data:image/png;base64,abc");
+
+    await getOpenAppIcon("Xcode");
+
+    expect(invokeMock).toHaveBeenCalledWith("get_open_app_icon", {
+      appName: "Xcode",
+    });
+  });
+
+  it("reads agent.md for a workspace", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({ exists: true, content: "# Agent", truncated: false });
+
+    await readAgentMd("ws-agent");
+
+    expect(invokeMock).toHaveBeenCalledWith("file_read", {
+      scope: "workspace",
+      kind: "agents",
+      workspaceId: "ws-agent",
+    });
+  });
+
+  it("writes agent.md for a workspace", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({});
+
+    await writeAgentMd("ws-agent", "# Agent");
+
+    expect(invokeMock).toHaveBeenCalledWith("file_write", {
+      scope: "workspace",
+      kind: "agents",
+      workspaceId: "ws-agent",
+      content: "# Agent",
+    });
+  });
+
+  it("reads global AGENTS.md", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({ exists: true, content: "# Global", truncated: false });
+
+    await readGlobalAgentsMd();
+
+    expect(invokeMock).toHaveBeenCalledWith("file_read", {
+      scope: "global",
+      kind: "agents",
+      workspaceId: undefined,
+    });
+  });
+
+  it("writes global AGENTS.md", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({});
+
+    await writeGlobalAgentsMd("# Global");
+
+    expect(invokeMock).toHaveBeenCalledWith("file_write", {
+      scope: "global",
+      kind: "agents",
+      workspaceId: undefined,
+      content: "# Global",
+    });
+  });
+
+  it("reads global config.toml", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({ exists: true, content: "model = \"gpt-5\"", truncated: false });
+
+    await readGlobalCodexConfigToml();
+
+    expect(invokeMock).toHaveBeenCalledWith("file_read", {
+      scope: "global",
+      kind: "config",
+      workspaceId: undefined,
+    });
+  });
+
+  it("writes global config.toml", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({});
+
+    await writeGlobalCodexConfigToml("model = \"gpt-5\"");
+
+    expect(invokeMock).toHaveBeenCalledWith("file_write", {
+      scope: "global",
+      kind: "config",
+      workspaceId: undefined,
+      content: "model = \"gpt-5\"",
+    });
+  });
+
   it("fills sendUserMessage defaults in payload", async () => {
     const invokeMock = vi.mocked(invoke);
     invokeMock.mockResolvedValueOnce({});
@@ -109,7 +238,6 @@ describe("tauri invoke wrappers", () => {
       effort: null,
       accessMode: "full-access",
       images: ["image.png"],
-      collaborationMode: null,
     });
   });
 
@@ -136,6 +264,45 @@ describe("tauri invoke wrappers", () => {
       workspaceId: "ws-6",
       requestId: 101,
       result: { decision: "accept" },
+    });
+  });
+
+  it("nests answers for user input responses", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({});
+
+    await respondToUserInputRequest("ws-7", 202, {
+      confirm_path: { answers: ["Yes"] },
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("respond_to_server_request", {
+      workspaceId: "ws-7",
+      requestId: 202,
+      result: {
+        answers: {
+          confirm_path: { answers: ["Yes"] },
+        },
+      },
+    });
+  });
+
+  it("passes through multiple user input answers", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce({});
+
+    const answers = {
+      confirm_path: { answers: ["Yes"] },
+      notes: { answers: ["First line", "Second line"] },
+    };
+
+    await respondToUserInputRequest("ws-8", 303, answers);
+
+    expect(invokeMock).toHaveBeenCalledWith("respond_to_server_request", {
+      workspaceId: "ws-8",
+      requestId: 303,
+      result: {
+        answers,
+      },
     });
   });
 });

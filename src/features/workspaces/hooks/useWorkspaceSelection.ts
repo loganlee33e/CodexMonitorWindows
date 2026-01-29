@@ -1,14 +1,16 @@
 import { useCallback } from "react";
+import * as Sentry from "@sentry/react";
 import type { WorkspaceInfo, WorkspaceSettings } from "../../../types";
 
 type UseWorkspaceSelectionOptions = {
   workspaces: WorkspaceInfo[];
   isCompact: boolean;
+  activeWorkspaceId: string | null;
   setActiveTab: (tab: "projects" | "codex" | "git" | "log") => void;
   setActiveWorkspaceId: (workspaceId: string | null) => void;
   updateWorkspaceSettings: (
     workspaceId: string,
-    settings: WorkspaceSettings,
+    settings: Partial<WorkspaceSettings>,
   ) => Promise<WorkspaceInfo>;
   setCenterMode: (mode: "chat" | "diff") => void;
   setSelectedDiffPath: (path: string | null) => void;
@@ -23,6 +25,7 @@ type UseWorkspaceSelectionResult = {
 export function useWorkspaceSelection({
   workspaces,
   isCompact,
+  activeWorkspaceId,
   setActiveTab,
   setActiveWorkspaceId,
   updateWorkspaceSettings,
@@ -38,18 +41,28 @@ export function useWorkspaceSelection({
     (workspaceId: string) => {
       setSelectedDiffPath(null);
       const target = workspaces.find((entry) => entry.id === workspaceId);
+      const didSwitch = activeWorkspaceId !== workspaceId;
       if (target?.settings.sidebarCollapsed) {
         void updateWorkspaceSettings(workspaceId, {
-          ...target.settings,
           sidebarCollapsed: false,
         });
       }
       setActiveWorkspaceId(workspaceId);
+      if (didSwitch) {
+        Sentry.metrics.count("workspace_switched", 1, {
+          attributes: {
+            workspace_id: workspaceId,
+            workspace_kind: target?.kind ?? "main",
+            reason: "select",
+          },
+        });
+      }
       if (isCompact) {
         setActiveTab("codex");
       }
     },
     [
+      activeWorkspaceId,
       isCompact,
       setActiveTab,
       setActiveWorkspaceId,

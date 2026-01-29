@@ -38,6 +38,11 @@ CodexMonitor is a macOS Tauri app that orchestrates Codex agents across local wo
 - **Styles**: one CSS file per UI area in `src/styles/` (no global refactors in components).
 - **Backend IPC**: add new commands in `src-tauri/src/lib.rs` and mirror them in the service.
 - **App-server protocol**: do not send any requests before `initialize/initialized`.
+- **Keep `src/App.tsx` lean**:
+  - Keep it to wiring: hook composition, top-level layout, and route/section assembly.
+  - Move stateful logic/effects into hooks under `src/features/app/hooks/`.
+  - Keep Tauri IPC, menu listeners, and subscriptions out of `src/App.tsx` (use hooks/services).
+  - If a block grows beyond ~60 lines or needs its own state/effects, extract it.
 
 ## App-Server Flow
 
@@ -117,10 +122,43 @@ npm run test:watch
 - Experimental feature toggles: UI state in `src/features/settings/components/SettingsView.tsx`, shared types in `src/types.ts`, and sync to Codex `config.toml` via `src-tauri/src/codex_config.rs` + `src-tauri/src/settings.rs` (daemon mirror in `src-tauri/src/bin/codex_monitor_daemon.rs`).
 - Git diff behavior: `src/features/git/hooks/useGitStatus.ts` (polling + activity refresh) and `src-tauri/src/lib.rs` (libgit2 status).
 - GitHub issues panel: `src/features/git/hooks/useGitHubIssues.ts` + `src-tauri/src/git.rs`.
-- Thread history rendering: `src/features/threads/hooks/useThreads.ts` converts `thread/resume` turns into UI items.
-  - Thread names update on first user message (preview-based), and on resume if a preview exists.
+- Thread history rendering: `src/features/threads/hooks/useThreads.ts` merges `thread/resume` turns into UI items.
+  - Thread names can come from the resume preview (when no custom name) or from the first user/assistant message when the name is auto-generated.
 - Thread item parsing/normalization: `src/utils/threadItems.ts`.
 - Thread state reducer: `src/features/threads/hooks/useThreadsReducer.ts`.
+
+## Threads Feature Split
+
+The `useThreads` hook is a composition layer that wires together focused hooks and shared utilities. This keeps side effects isolated and makes the flow easier to test.
+
+- Orchestration: `src/features/threads/hooks/useThreads.ts`
+  - Composes the hooks below and provides the public API to the UI.
+- Actions (RPC + list/paging): `src/features/threads/hooks/useThreadActions.ts`
+  - `thread/start`, `thread/resume`, `thread/list`, pagination, archive.
+  - Updates activity timestamps and thread names/previews.
+- Approvals (allowlist + decisions): `src/features/threads/hooks/useThreadApprovals.ts`
+  - Tracks remembered commands and resolves approval requests.
+- Event handlers (server → reducer): `src/features/threads/hooks/useThreadEventHandlers.ts`
+  - Composes:
+    - `useThreadApprovalEvents.ts` (approval requests + allowlist auto-accept)
+    - `useThreadItemEvents.ts` (item-level updates, deltas, tool/reasoning/agent items)
+    - `useThreadTurnEvents.ts` (turn start/complete/interrupt, plan/token/rate limit updates)
+- Messaging: `src/features/threads/hooks/useThreadMessaging.ts`
+  - Sends user messages and handles local echo/queueing.
+- Thread state/storage: `src/features/threads/hooks/useThreadStorage.ts`
+  - LocalStorage-backed custom names, pinned threads, activity map.
+- Status updates (shared): `src/features/threads/hooks/useThreadStatus.ts`
+  - Centralized helpers for processing/reviewing/active turn updates.
+- Selectors: `src/features/threads/hooks/useThreadSelectors.ts`
+  - Active thread ID/items for the active workspace.
+- Rate limits: `src/features/threads/hooks/useThreadRateLimits.ts`
+  - Fetches and normalizes account rate limits.
+- Collab links: `src/features/threads/hooks/useThreadLinking.ts`
+  - Applies parent/child links to thread state.
+- Utilities:
+  - `src/features/threads/utils/threadNormalize.ts` (shape normalization)
+  - `src/features/threads/utils/threadStorage.ts` (persistence helpers)
+  - `src/utils/threadItems.ts` (thread item conversion + merge)
 
 ## Notes
 
@@ -132,3 +170,10 @@ npm run test:watch
 - UI preferences (panel sizes, reduced transparency toggle, recent thread activity) live in `localStorage`.
 - GitHub issues require `gh` to be installed and authenticated.
 - Custom prompts are loaded from `$CODEX_HOME/prompts` (or `~/.codex/prompts`) and support optional frontmatter metadata.
+
+## Error Toasts
+
+- Use `pushErrorToast` from `src/services/toasts.ts` to surface user-facing errors.
+- Example: `pushErrorToast({ title: "Couldn’t open workspace", message: errorMessage });`
+- The toast UI is wired at the app level via `useErrorToasts` in `src/features/notifications/hooks/useErrorToasts.ts` and rendered by `src/features/notifications/components/ErrorToasts.tsx`.
+- Styles live in `src/styles/error-toasts.css` and are imported by `src/App.tsx`.

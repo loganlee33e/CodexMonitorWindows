@@ -3,9 +3,11 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "../../../types";
 import {
+  addWorkspace,
   listWorkspaces,
   renameWorktree,
   renameWorktreeUpstream,
+  updateWorkspaceSettings,
 } from "../../../services/tauri";
 import { useWorkspaces } from "./useWorkspaces";
 
@@ -17,6 +19,7 @@ vi.mock("../../../services/tauri", () => ({
   addWorkspace: vi.fn(),
   addWorktree: vi.fn(),
   connectWorkspace: vi.fn(),
+  isWorkspacePathDir: vi.fn(),
   pickWorkspacePath: vi.fn(),
   removeWorkspace: vi.fn(),
   removeWorktree: vi.fn(),
@@ -33,6 +36,28 @@ const worktree: WorkspaceInfo = {
   parentId: "parent-1",
   worktree: { branch: "feature/old" },
   settings: { sidebarCollapsed: false },
+};
+
+const workspaceOne: WorkspaceInfo = {
+  id: "ws-1",
+  name: "workspace-one",
+  path: "/tmp/ws-1",
+  connected: true,
+  kind: "main",
+  parentId: null,
+  worktree: null,
+  settings: { sidebarCollapsed: false, groupId: null },
+};
+
+const workspaceTwo: WorkspaceInfo = {
+  id: "ws-2",
+  name: "workspace-two",
+  path: "/tmp/ws-2",
+  connected: true,
+  kind: "main",
+  parentId: null,
+  worktree: null,
+  settings: { sidebarCollapsed: false, groupId: null },
 };
 
 describe("useWorkspaces.renameWorktree", () => {
@@ -145,5 +170,81 @@ describe("useWorkspaces.renameWorktree", () => {
       "feature/old",
       "feature/new",
     );
+  });
+});
+
+describe("useWorkspaces.updateWorkspaceSettings", () => {
+  it("does not throw when multiple updates are queued in the same tick", async () => {
+    const listWorkspacesMock = vi.mocked(listWorkspaces);
+    const updateWorkspaceSettingsMock = vi.mocked(updateWorkspaceSettings);
+    listWorkspacesMock.mockResolvedValue([workspaceOne, workspaceTwo]);
+    updateWorkspaceSettingsMock.mockImplementation(async (workspaceId, settings) => {
+      const base = workspaceId === workspaceOne.id ? workspaceOne : workspaceTwo;
+      return { ...base, settings };
+    });
+
+    const { result } = renderHook(() => useWorkspaces());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    let updatePromise: Promise<WorkspaceInfo[]>;
+    act(() => {
+      updatePromise = Promise.all([
+        result.current.updateWorkspaceSettings(workspaceOne.id, {
+          sidebarCollapsed: true,
+        }),
+        result.current.updateWorkspaceSettings(workspaceTwo.id, {
+          sidebarCollapsed: true,
+        }),
+      ]);
+    });
+
+    await act(async () => {
+      await updatePromise;
+    });
+
+    expect(updateWorkspaceSettingsMock).toHaveBeenCalledTimes(2);
+    expect(
+      result.current.workspaces.find((entry) => entry.id === workspaceOne.id)
+        ?.settings.sidebarCollapsed,
+    ).toBe(true);
+    expect(
+      result.current.workspaces.find((entry) => entry.id === workspaceTwo.id)
+        ?.settings.sidebarCollapsed,
+    ).toBe(true);
+  });
+});
+
+describe("useWorkspaces.addWorkspaceFromPath", () => {
+  it("adds a workspace and sets it active", async () => {
+    const listWorkspacesMock = vi.mocked(listWorkspaces);
+    const addWorkspaceMock = vi.mocked(addWorkspace);
+    listWorkspacesMock.mockResolvedValue([]);
+    addWorkspaceMock.mockResolvedValue({
+      id: "workspace-1",
+      name: "repo",
+      path: "/tmp/repo",
+      connected: true,
+      kind: "main",
+      parentId: null,
+      worktree: null,
+      settings: { sidebarCollapsed: false },
+    });
+
+    const { result } = renderHook(() => useWorkspaces());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.addWorkspaceFromPath("/tmp/repo");
+    });
+
+    expect(addWorkspaceMock).toHaveBeenCalledWith("/tmp/repo", null);
+    expect(result.current.workspaces).toHaveLength(1);
+    expect(result.current.activeWorkspaceId).toBe("workspace-1");
   });
 });

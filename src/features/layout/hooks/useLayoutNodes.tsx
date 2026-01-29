@@ -1,11 +1,12 @@
-import type { MouseEvent, ReactNode, RefObject } from "react";
-import { ArrowLeft } from "lucide-react";
+import type { DragEvent, MouseEvent, ReactNode, RefObject } from "react";
+import ArrowLeft from "lucide-react/dist/esm/icons/arrow-left";
 import { Sidebar } from "../../app/components/Sidebar";
 import { Home } from "../../home/components/Home";
 import { MainHeader } from "../../app/components/MainHeader";
 import { Messages } from "../../messages/components/Messages";
 import { ApprovalToasts } from "../../app/components/ApprovalToasts";
 import { UpdateToast } from "../../update/components/UpdateToast";
+import { ErrorToasts } from "../../notifications/components/ErrorToasts";
 import { Composer } from "../../composer/components/Composer";
 import { GitDiffPanel } from "../../git/components/GitDiffPanel";
 import { GitDiffViewer } from "../../git/components/GitDiffViewer";
@@ -23,6 +24,7 @@ import type {
   BranchInfo,
   CollaborationModeOption,
   ConversationItem,
+  ComposerEditorSettings,
   CustomPromptOption,
   DebugEntry,
   DictationSessionState,
@@ -34,8 +36,11 @@ import type {
   GitLogEntry,
   LocalUsageSnapshot,
   ModelOption,
+  OpenAppTarget,
   QueuedMessage,
   RateLimitSnapshot,
+  RequestUserInputRequest,
+  RequestUserInputResponse,
   SkillOption,
   ThreadSummary,
   ThreadTokenUsage,
@@ -45,6 +50,7 @@ import type {
 import type { UpdateState } from "../../update/hooks/useUpdater";
 import type { TerminalSessionState } from "../../terminal/hooks/useTerminalSession";
 import type { TerminalTab } from "../../terminal/hooks/useTerminalTabs";
+import type { ErrorToast } from "../../../services/toasts";
 
 type ThreadActivityStatus = {
   isProcessing: boolean;
@@ -58,6 +64,11 @@ type GitDiffViewerItem = {
   path: string;
   status: string;
   diff: string;
+  isImage?: boolean;
+  oldImageData?: string | null;
+  newImageData?: string | null;
+  oldImageMime?: string | null;
+  newImageMime?: string | null;
 };
 
 type WorktreeRenameState = {
@@ -87,18 +98,24 @@ type LayoutNodesOptions = {
     workspaces: WorkspaceInfo[];
   }>;
   hasWorkspaceGroups: boolean;
+  deletingWorktreeIds: Set<string>;
   threadsByWorkspace: Record<string, ThreadSummary[]>;
   threadParentById: Record<string, string>;
   threadStatusById: Record<string, ThreadActivityStatus>;
   threadListLoadingByWorkspace: Record<string, boolean>;
   threadListPagingByWorkspace: Record<string, boolean>;
   threadListCursorByWorkspace: Record<string, string | null>;
-  lastAgentMessageByThread: Record<string, { text: string; timestamp: number }>;
   activeWorkspaceId: string | null;
   activeThreadId: string | null;
   activeItems: ConversationItem[];
   activeRateLimits: RateLimitSnapshot | null;
+  codeBlockCopyUseModifier: boolean;
+  openAppTargets: OpenAppTarget[];
+  openAppIconById: Record<string, string>;
+  selectedOpenAppId: string;
+  onSelectOpenAppId: (id: string) => void;
   approvals: ApprovalRequest[];
+  userInputRequests: RequestUserInputRequest[];
   handleApprovalDecision: (
     request: ApprovalRequest,
     decision: "accept" | "decline",
@@ -106,6 +123,10 @@ type LayoutNodesOptions = {
   handleApprovalRemember: (
     request: ApprovalRequest,
     command: string[],
+  ) => void;
+  handleUserInputSubmit: (
+    request: RequestUserInputRequest,
+    response: RequestUserInputResponse,
   ) => void;
   onOpenSettings: () => void;
   onOpenDictationSettings?: () => void;
@@ -121,6 +142,7 @@ type LayoutNodesOptions = {
   onToggleWorkspaceCollapse: (workspaceId: string, collapsed: boolean) => void;
   onSelectThread: (workspaceId: string, threadId: string) => void;
   onDeleteThread: (workspaceId: string, threadId: string) => void;
+  onSyncThread: (workspaceId: string, threadId: string) => void;
   pinThread: (workspaceId: string, threadId: string) => boolean;
   unpinThread: (workspaceId: string, threadId: string) => void;
   isThreadPinned: (workspaceId: string, threadId: string) => boolean;
@@ -130,9 +152,18 @@ type LayoutNodesOptions = {
   onDeleteWorktree: (workspaceId: string) => void;
   onLoadOlderThreads: (workspaceId: string) => void;
   onReloadWorkspaceThreads: (workspaceId: string) => void;
+  workspaceDropTargetRef: RefObject<HTMLElement | null>;
+  isWorkspaceDropActive: boolean;
+  workspaceDropText: string;
+  onWorkspaceDragOver: (event: DragEvent<HTMLElement>) => void;
+  onWorkspaceDragEnter: (event: DragEvent<HTMLElement>) => void;
+  onWorkspaceDragLeave: (event: DragEvent<HTMLElement>) => void;
+  onWorkspaceDrop: (event: DragEvent<HTMLElement>) => void;
   updaterState: UpdateState;
   onUpdate: () => void;
   onDismissUpdate: () => void;
+  errorToasts: ErrorToast[];
+  onDismissErrorToast: (id: string) => void;
   latestAgentRuns: Array<{
     threadId: string;
     message: string;
@@ -165,6 +196,16 @@ type LayoutNodesOptions = {
   onCopyThread: () => void | Promise<void>;
   onToggleTerminal: () => void;
   showTerminalButton: boolean;
+  launchScript: string | null;
+  launchScriptEditorOpen: boolean;
+  launchScriptDraft: string;
+  launchScriptSaving: boolean;
+  launchScriptError: string | null;
+  onRunLaunchScript: () => void;
+  onOpenLaunchScriptEditor: () => void;
+  onCloseLaunchScriptEditor: () => void;
+  onLaunchScriptDraftChange: (value: string) => void;
+  onSaveLaunchScript: () => void;
   mainHeaderActionsNode?: ReactNode;
   centerMode: "chat" | "diff";
   onExitDiff: () => void;
@@ -233,6 +274,7 @@ type LayoutNodesOptions = {
   onSelectGitRoot: (path: string) => void;
   onClearGitRoot: () => void;
   onPickGitRoot: () => void | Promise<void>;
+  onStageGitAll: () => Promise<void>;
   onStageGitFile: (path: string) => Promise<void>;
   onUnstageGitFile: (path: string) => Promise<void>;
   onRevertGitFile: (path: string) => Promise<void>;
@@ -278,6 +320,7 @@ type LayoutNodesOptions = {
   onMovePrompt: (data: { path: string; scope: "workspace" | "global" }) => void | Promise<void>;
   onRevealWorkspacePrompts: () => void | Promise<void>;
   onRevealGeneralPrompts: () => void | Promise<void>;
+  canRevealGeneralPrompts: boolean;
   onSend: (text: string, images: string[]) => void | Promise<void>;
   onQueue: (text: string, images: string[]) => void | Promise<void>;
   onStop: () => void;
@@ -308,12 +351,17 @@ type LayoutNodesOptions = {
   reasoningOptions: string[];
   selectedEffort: string | null;
   onSelectEffort: (effort: string | null) => void;
+  reasoningSupported: boolean;
   accessMode: AccessMode;
   onSelectAccessMode: (mode: AccessMode) => void;
   skills: SkillOption[];
   prompts: CustomPromptOption[];
   files: string[];
+  onInsertComposerText: (text: string) => void;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
+  composerEditorSettings: ComposerEditorSettings;
+  composerEditorExpanded: boolean;
+  onToggleComposerEditorExpanded: () => void;
   dictationEnabled: boolean;
   dictationState: DictationSessionState;
   dictationLevel: number;
@@ -350,6 +398,7 @@ type LayoutNodesResult = {
   composerNode: ReactNode;
   approvalToastsNode: ReactNode;
   updateToastNode: ReactNode;
+  errorToastsNode: ReactNode;
   homeNode: ReactNode;
   mainHeaderNode: ReactNode;
   desktopTopbarLeftNode: ReactNode;
@@ -376,13 +425,13 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       workspaces={options.workspaces}
       groupedWorkspaces={options.groupedWorkspaces}
       hasWorkspaceGroups={options.hasWorkspaceGroups}
+      deletingWorktreeIds={options.deletingWorktreeIds}
       threadsByWorkspace={options.threadsByWorkspace}
       threadParentById={options.threadParentById}
       threadStatusById={options.threadStatusById}
       threadListLoadingByWorkspace={options.threadListLoadingByWorkspace}
       threadListPagingByWorkspace={options.threadListPagingByWorkspace}
       threadListCursorByWorkspace={options.threadListCursorByWorkspace}
-      lastAgentMessageByThread={options.lastAgentMessageByThread}
       activeWorkspaceId={options.activeWorkspaceId}
       activeThreadId={options.activeThreadId}
       accountRateLimits={options.activeRateLimits}
@@ -399,6 +448,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       onToggleWorkspaceCollapse={options.onToggleWorkspaceCollapse}
       onSelectThread={options.onSelectThread}
       onDeleteThread={options.onDeleteThread}
+      onSyncThread={options.onSyncThread}
       pinThread={options.pinThread}
       unpinThread={options.unpinThread}
       isThreadPinned={options.isThreadPinned}
@@ -408,6 +458,13 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       onDeleteWorktree={options.onDeleteWorktree}
       onLoadOlderThreads={options.onLoadOlderThreads}
       onReloadWorkspaceThreads={options.onReloadWorkspaceThreads}
+      workspaceDropTargetRef={options.workspaceDropTargetRef}
+      isWorkspaceDropActive={options.isWorkspaceDropActive}
+      workspaceDropText={options.workspaceDropText}
+      onWorkspaceDragOver={options.onWorkspaceDragOver}
+      onWorkspaceDragEnter={options.onWorkspaceDragEnter}
+      onWorkspaceDragLeave={options.onWorkspaceDragLeave}
+      onWorkspaceDrop={options.onWorkspaceDrop}
     />
   );
 
@@ -415,7 +472,13 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
     <Messages
       items={options.activeItems}
       threadId={options.activeThreadId ?? null}
+      workspaceId={options.activeWorkspace?.id ?? null}
       workspacePath={options.activeWorkspace?.path ?? null}
+      openTargets={options.openAppTargets}
+      selectedOpenAppId={options.selectedOpenAppId}
+      codeBlockCopyUseModifier={options.codeBlockCopyUseModifier}
+      userInputRequests={options.userInputRequests}
+      onUserInputSubmit={options.handleUserInputSubmit}
       isThinking={
         options.activeThreadId
           ? options.threadStatusById[options.activeThreadId]?.isProcessing ?? false
@@ -462,12 +525,17 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       reasoningOptions={options.reasoningOptions}
       selectedEffort={options.selectedEffort}
       onSelectEffort={options.onSelectEffort}
+      reasoningSupported={options.reasoningSupported}
       accessMode={options.accessMode}
       onSelectAccessMode={options.onSelectAccessMode}
       skills={options.skills}
       prompts={options.prompts}
       files={options.files}
       textareaRef={options.textareaRef}
+      historyKey={options.activeWorkspace?.id ?? null}
+      editorSettings={options.composerEditorSettings}
+      editorExpanded={options.composerEditorExpanded}
+      onToggleEditorExpanded={options.onToggleComposerEditorExpanded}
       dictationEnabled={options.dictationEnabled}
       dictationState={options.dictationState}
       dictationLevel={options.dictationLevel}
@@ -499,6 +567,10 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
     />
   );
 
+  const errorToastsNode = (
+    <ErrorToasts toasts={options.errorToasts} onDismiss={options.onDismissErrorToast} />
+  );
+
   const homeNode = (
     <Home
       onOpenProject={options.onAddWorkspace}
@@ -527,6 +599,10 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       disableBranchMenu={options.isWorktreeWorkspace}
       parentPath={options.activeParentWorkspace?.path ?? null}
       worktreePath={options.isWorktreeWorkspace ? options.activeWorkspace.path : null}
+      openTargets={options.openAppTargets}
+      openAppIconById={options.openAppIconById}
+      selectedOpenAppId={options.selectedOpenAppId}
+      onSelectOpenAppId={options.onSelectOpenAppId}
       branchName={options.branchName}
       branches={options.branches}
       onCheckoutBranch={options.onCheckoutBranch}
@@ -536,6 +612,16 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       onToggleTerminal={options.onToggleTerminal}
       isTerminalOpen={options.terminalOpen}
       showTerminalButton={options.showTerminalButton}
+      launchScript={options.launchScript}
+      launchScriptEditorOpen={options.launchScriptEditorOpen}
+      launchScriptDraft={options.launchScriptDraft}
+      launchScriptSaving={options.launchScriptSaving}
+      launchScriptError={options.launchScriptError}
+      onRunLaunchScript={options.onRunLaunchScript}
+      onOpenLaunchScriptEditor={options.onOpenLaunchScriptEditor}
+      onCloseLaunchScriptEditor={options.onCloseLaunchScriptEditor}
+      onLaunchScriptDraftChange={options.onLaunchScriptDraftChange}
+      onSaveLaunchScript={options.onSaveLaunchScript}
       extraActionsNode={options.mainHeaderActionsNode}
     />
   ) : null;
@@ -570,11 +656,17 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
   if (options.filePanelMode === "files" && options.activeWorkspace) {
     gitDiffPanelNode = (
       <FileTreePanel
+        workspaceId={options.activeWorkspace.id}
         workspacePath={options.activeWorkspace.path}
         files={options.files}
         isLoading={options.fileTreeLoading}
         filePanelMode={options.filePanelMode}
         onFilePanelModeChange={options.onFilePanelModeChange}
+        onInsertText={options.onInsertComposerText}
+        openTargets={options.openAppTargets}
+        openAppIconById={options.openAppIconById}
+        selectedOpenAppId={options.selectedOpenAppId}
+        onSelectOpenAppId={options.onSelectOpenAppId}
       />
     );
   } else if (options.filePanelMode === "prompts") {
@@ -592,6 +684,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
         onMovePrompt={options.onMovePrompt}
         onRevealWorkspacePrompts={options.onRevealWorkspacePrompts}
         onRevealGeneralPrompts={options.onRevealGeneralPrompts}
+        canRevealGeneralPrompts={options.canRevealGeneralPrompts}
       />
     );
   } else {
@@ -649,6 +742,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
         onSelectGitRoot={options.onSelectGitRoot}
         onClearGitRoot={options.onClearGitRoot}
         onPickGitRoot={options.onPickGitRoot}
+        onStageAllChanges={options.onStageGitAll}
         onStageFile={options.onStageGitFile}
         onUnstageFile={options.onUnstageGitFile}
         onRevertFile={options.onRevertGitFile}
@@ -766,6 +860,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
     composerNode,
     approvalToastsNode,
     updateToastNode,
+    errorToastsNode,
     homeNode,
     mainHeaderNode,
     desktopTopbarLeftNode,

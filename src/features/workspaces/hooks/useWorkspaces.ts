@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as Sentry from "@sentry/react";
 import type {
   AppSettings,
   DebugEntry,
@@ -6,12 +7,13 @@ import type {
   WorkspaceInfo,
   WorkspaceSettings,
 } from "../../../types";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, message } from "@tauri-apps/plugin-dialog";
 import {
   addClone as addCloneService,
   addWorkspace as addWorkspaceService,
   addWorktree as addWorktreeService,
   connectWorkspace as connectWorkspaceService,
+  isWorkspacePathDir as isWorkspacePathDirService,
   listWorkspaces,
   pickWorkspacePath,
   removeWorkspace as removeWorkspaceService,
@@ -76,6 +78,10 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [deletingWorktreeIds, setDeletingWorktreeIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const workspaceSettingsRef = useRef<Map<string, WorkspaceSettings>>(new Map());
   const { onDebug, defaultCodexBin, appSettings, onUpdateAppSettings } = options;
 
   const refreshWorkspaces = useCallback(async () => {
@@ -93,13 +99,21 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
     } catch (err) {
       console.error("Failed to load workspaces", err);
       setHasLoaded(true);
-      throw err;
+      return undefined;
     }
   }, []);
 
   useEffect(() => {
     void refreshWorkspaces();
   }, [refreshWorkspaces]);
+
+  useEffect(() => {
+    const next = new Map<string, WorkspaceSettings>();
+    workspaces.forEach((entry) => {
+      next.set(entry.id, entry.settings);
+    });
+    workspaceSettingsRef.current = next;
+  }, [workspaces]);
 
   const activeWorkspace = useMemo(
     () => workspaces.find((entry) => entry.id === activeWorkspaceId) ?? null,
@@ -205,36 +219,71 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
     [getWorkspaceGroupId, workspaceById, workspaceGroupById],
   );
 
-  async function addWorkspace() {
+  const addWorkspaceFromPath = useCallback(
+    async (path: string) => {
+      const selection = path.trim();
+      if (!selection) {
+        return null;
+      }
+      onDebug?.({
+        id: `${Date.now()}-client-add-workspace`,
+        timestamp: Date.now(),
+        source: "client",
+        label: "workspace/add",
+        payload: { path: selection },
+      });
+      try {
+        const workspace = await addWorkspaceService(selection, defaultCodexBin ?? null);
+        setWorkspaces((prev) => [...prev, workspace]);
+        setActiveWorkspaceId(workspace.id);
+        Sentry.metrics.count("workspace_added", 1, {
+          attributes: {
+            workspace_id: workspace.id,
+            workspace_kind: workspace.kind ?? "main",
+          },
+        });
+        return workspace;
+      } catch (error) {
+        onDebug?.({
+          id: `${Date.now()}-client-add-workspace-error`,
+          timestamp: Date.now(),
+          source: "error",
+          label: "workspace/add error",
+          payload: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+    [defaultCodexBin, onDebug],
+  );
+
+  const addWorkspace = useCallback(async () => {
     const selection = await pickWorkspacePath();
     if (!selection) {
       return null;
     }
-    onDebug?.({
-      id: `${Date.now()}-client-add-workspace`,
-      timestamp: Date.now(),
-      source: "client",
-      label: "workspace/add",
-      payload: { path: selection },
-    });
-    try {
-      const workspace = await addWorkspaceService(selection, defaultCodexBin ?? null);
-      setWorkspaces((prev) => [...prev, workspace]);
-      setActiveWorkspaceId(workspace.id);
-      return workspace;
-    } catch (error) {
-      onDebug?.({
-        id: `${Date.now()}-client-add-workspace-error`,
-        timestamp: Date.now(),
-        source: "error",
-        label: "workspace/add error",
-        payload: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
-  }
+    return addWorkspaceFromPath(selection);
+  }, [addWorkspaceFromPath]);
 
-  async function addWorktreeAgent(parent: WorkspaceInfo, branch: string) {
+  const filterWorkspacePaths = useCallback(async (paths: string[]) => {
+    const trimmed = paths.map((path) => path.trim()).filter(Boolean);
+    if (trimmed.length === 0) {
+      return [];
+    }
+    const checks = await Promise.all(
+      trimmed.map(async (path) => ({
+        path,
+        isDir: await isWorkspacePathDirService(path),
+      })),
+    );
+    return checks.filter((entry) => entry.isDir).map((entry) => entry.path);
+  }, []);
+
+  async function addWorktreeAgent(
+    parent: WorkspaceInfo,
+    branch: string,
+    options?: { activate?: boolean },
+  ) {
     const trimmed = branch.trim();
     if (!trimmed) {
       return null;
@@ -249,7 +298,15 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
     try {
       const workspace = await addWorktreeService(parent.id, trimmed);
       setWorkspaces((prev) => [...prev, workspace]);
-      setActiveWorkspaceId(workspace.id);
+      if (options?.activate !== false) {
+        setActiveWorkspaceId(workspace.id);
+      }
+      Sentry.metrics.count("worktree_agent_created", 1, {
+        attributes: {
+          workspace_id: workspace.id,
+          parent_id: parent.id,
+        },
+      });
       return workspace;
     } catch (error) {
       onDebug?.({
@@ -291,6 +348,12 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
       const workspace = await addCloneService(source.id, trimmedFolder, trimmedName);
       setWorkspaces((prev) => [...prev, workspace]);
       setActiveWorkspaceId(workspace.id);
+      Sentry.metrics.count("clone_agent_created", 1, {
+        attributes: {
+          workspace_id: workspace.id,
+          parent_id: source.id,
+        },
+      });
       return workspace;
     } catch (error) {
       onDebug?.({
@@ -333,37 +396,47 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
   }
 
   const updateWorkspaceSettings = useCallback(
-    async (workspaceId: string, settings: WorkspaceSettings) => {
+    async (workspaceId: string, patch: Partial<WorkspaceSettings>) => {
       onDebug?.({
         id: `${Date.now()}-client-update-workspace-settings`,
         timestamp: Date.now(),
         source: "client",
         label: "workspace/settings",
-        payload: { workspaceId, settings },
+        payload: { workspaceId, patch },
       });
-      let previous: WorkspaceInfo | null = null;
+      const currentWorkspace = workspaces.find((entry) => entry.id === workspaceId) ?? null;
+      const currentSettings =
+        workspaceSettingsRef.current.get(workspaceId) ?? currentWorkspace?.settings ?? null;
+      if (!currentWorkspace || !currentSettings) {
+        throw new Error("workspace not found");
+      }
+      const previousSettings = currentSettings;
+      const nextSettings = { ...currentSettings, ...patch };
+      workspaceSettingsRef.current.set(workspaceId, nextSettings);
       setWorkspaces((prev) =>
         prev.map((entry) => {
           if (entry.id !== workspaceId) {
             return entry;
           }
-          previous = entry;
-          return { ...entry, settings };
+          return { ...entry, settings: nextSettings };
         }),
       );
       try {
-        const updated = await updateWorkspaceSettingsService(workspaceId, settings);
+        const updated = await updateWorkspaceSettingsService(workspaceId, nextSettings);
+        workspaceSettingsRef.current.set(workspaceId, updated.settings);
         setWorkspaces((prev) =>
           prev.map((entry) => (entry.id === workspaceId ? updated : entry)),
         );
         return updated;
       } catch (error) {
-        if (previous) {
-          const restore = previous;
-          setWorkspaces((prev) =>
-            prev.map((entry) => (entry.id === workspaceId ? restore : entry)),
-          );
-        }
+        workspaceSettingsRef.current.set(workspaceId, previousSettings);
+        setWorkspaces((prev) =>
+          prev.map((entry) =>
+            entry.id === workspaceId
+              ? { ...entry, settings: previousSettings }
+              : entry,
+          ),
+        );
         onDebug?.({
           id: `${Date.now()}-client-update-workspace-settings-error`,
           timestamp: Date.now(),
@@ -374,7 +447,7 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
         throw error;
       }
     },
-    [onDebug],
+    [onDebug, workspaces],
   );
 
   async function updateWorkspaceCodexBin(workspaceId: string, codexBin: string | null) {
@@ -538,7 +611,6 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
       await Promise.all([
         ...workspacesToUpdate.map((workspace) =>
           updateWorkspaceSettings(workspace.id, {
-            ...workspace.settings,
             groupId: null,
           }),
         ),
@@ -564,7 +636,6 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
       const resolvedGroupId =
         groupId && workspaceGroupById.has(groupId) ? groupId : null;
       await updateWorkspaceSettings(target.id, {
-        ...target.settings,
         groupId: resolvedGroupId,
       });
       return true;
@@ -652,6 +723,11 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
       return;
     }
 
+    setDeletingWorktreeIds((prev) => {
+      const next = new Set(prev);
+      next.add(workspaceId);
+      return next;
+    });
     onDebug?.({
       id: `${Date.now()}-client-remove-worktree`,
       timestamp: Date.now(),
@@ -664,14 +740,24 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
       setWorkspaces((prev) => prev.filter((entry) => entry.id !== workspaceId));
       setActiveWorkspaceId((prev) => (prev === workspaceId ? null : prev));
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       onDebug?.({
         id: `${Date.now()}-client-remove-worktree-error`,
         timestamp: Date.now(),
         source: "error",
         label: "worktree/remove error",
-        payload: error instanceof Error ? error.message : String(error),
+        payload: errorMessage,
       });
-      throw error;
+      void message(errorMessage, {
+        title: "Delete worktree failed",
+        kind: "error",
+      });
+    } finally {
+      setDeletingWorktreeIds((prev) => {
+        const next = new Set(prev);
+        next.delete(workspaceId);
+        return next;
+      });
     }
   }
 
@@ -760,6 +846,8 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
     activeWorkspaceId,
     setActiveWorkspaceId,
     addWorkspace,
+    addWorkspaceFromPath,
+    filterWorkspacePaths,
     addCloneAgent,
     addWorktreeAgent,
     connectWorkspace,
@@ -775,6 +863,7 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
     removeWorktree,
     renameWorktree,
     renameWorktreeUpstream,
+    deletingWorktreeIds,
     hasLoaded,
     refreshWorkspaces,
   };

@@ -1,5 +1,7 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use git2::{BranchType, DiffOptions, Repository, Sort, Status, StatusOptions};
 use serde_json::json;
 use tauri::State;
@@ -7,7 +9,7 @@ use tokio::process::Command;
 
 use crate::git_utils::{
     checkout_branch, commit_to_entry, diff_patch_to_string, diff_stats_for_path,
-    list_git_roots as scan_git_roots, parse_github_repo, resolve_git_root,
+    image_mime_type, list_git_roots as scan_git_roots, parse_github_repo, resolve_git_root,
 };
 use crate::state::AppState;
 use crate::types::{
@@ -15,12 +17,40 @@ use crate::types::{
     GitHubPullRequest, GitHubPullRequestComment, GitHubPullRequestDiff,
     GitHubPullRequestsResponse, GitLogResponse,
 };
-use crate::utils::normalize_git_path;
+use crate::utils::{git_env_path, normalize_git_path, resolve_git_binary};
+
+const INDEX_SKIP_WORKTREE_FLAG: u16 = 0x4000;
+const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+fn encode_image_base64(data: &[u8]) -> Option<String> {
+    if data.len() > MAX_IMAGE_BYTES {
+        return None;
+    }
+    Some(STANDARD.encode(data))
+}
+
+fn blob_to_base64(blob: git2::Blob) -> Option<String> {
+    if blob.size() > MAX_IMAGE_BYTES {
+        return None;
+    }
+    encode_image_base64(blob.content())
+}
+
+fn read_image_base64(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    if metadata.len() > MAX_IMAGE_BYTES as u64 {
+        return None;
+    }
+    let data = fs::read(path).ok()?;
+    encode_image_base64(&data)
+}
 
 async fn run_git_command(repo_root: &Path, args: &[&str]) -> Result<(), String> {
-    let output = Command::new("git")
+    let git_bin = resolve_git_binary().map_err(|e| format!("Failed to run git: {e}"))?;
+    let output = Command::new(git_bin)
         .args(args)
         .current_dir(repo_root)
+        .env("PATH", git_env_path())
         .output()
         .await
         .map_err(|e| format!("Failed to run git: {e}"))?;
@@ -40,6 +70,65 @@ async fn run_git_command(repo_root: &Path, args: &[&str]) -> Result<(), String> 
         return Err("Git command failed.".to_string());
     }
     Err(detail.to_string())
+}
+
+fn action_paths_for_file(repo_root: &Path, path: &str) -> Vec<String> {
+    let target = normalize_git_path(path).trim().to_string();
+    if target.is_empty() {
+        return Vec::new();
+    }
+
+    let repo = match Repository::open(repo_root) {
+        Ok(repo) => repo,
+        Err(_) => return vec![target],
+    };
+
+    let mut status_options = StatusOptions::new();
+    status_options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .renames_head_to_index(true)
+        .renames_index_to_workdir(true)
+        .include_ignored(false);
+
+    let statuses = match repo.statuses(Some(&mut status_options)) {
+        Ok(statuses) => statuses,
+        Err(_) => return vec![target],
+    };
+
+    for entry in statuses.iter() {
+        let status = entry.status();
+        if !(status.contains(Status::WT_RENAMED) || status.contains(Status::INDEX_RENAMED)) {
+            continue;
+        }
+        let delta = entry.index_to_workdir().or_else(|| entry.head_to_index());
+        let Some(delta) = delta else {
+            continue;
+        };
+        let (Some(old_path), Some(new_path)) =
+            (delta.old_file().path(), delta.new_file().path())
+        else {
+            continue;
+        };
+        let old_path = normalize_git_path(old_path.to_string_lossy().as_ref());
+        let new_path = normalize_git_path(new_path.to_string_lossy().as_ref());
+        if old_path != target && new_path != target {
+            continue;
+        }
+        if old_path == new_path || new_path.is_empty() {
+            return vec![target];
+        }
+        let mut result = Vec::new();
+        if !old_path.is_empty() {
+            result.push(old_path);
+        }
+        if !new_path.is_empty() && !result.contains(&new_path) {
+            result.push(new_path);
+        }
+        return if result.is_empty() { vec![target] } else { result };
+    }
+
+    vec![target]
 }
 
 fn parse_upstream_ref(name: &str) -> Option<(String, String)> {
@@ -331,6 +420,7 @@ pub(crate) async fn get_git_status(
         .get(&workspace_id)
         .ok_or("workspace not found")?
         .clone();
+    drop(workspaces);
 
     let repo_root = resolve_git_root(&entry)?;
     let repo = Repository::open(&repo_root).map_err(|e| e.to_string())?;
@@ -354,6 +444,7 @@ pub(crate) async fn get_git_status(
         .map_err(|e| e.to_string())?;
 
     let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
+    let index = repo.index().ok();
 
     let mut files = Vec::new();
     let mut staged_files = Vec::new();
@@ -364,6 +455,13 @@ pub(crate) async fn get_git_status(
         let path = entry.path().unwrap_or("");
         if path.is_empty() {
             continue;
+        }
+        if let Some(index) = index.as_ref() {
+            if let Some(entry) = index.get_path(Path::new(path), 0) {
+                if entry.flags_extended & INDEX_SKIP_WORKTREE_FLAG != 0 {
+                    continue;
+                }
+            }
         }
         let status = entry.status();
         let normalized_path = normalize_git_path(path);
@@ -449,14 +547,21 @@ pub(crate) async fn stage_git_file(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let workspaces = state.workspaces.lock().await;
-    let entry = workspaces
-        .get(&workspace_id)
-        .ok_or("workspace not found")?
-        .clone();
+    let entry = {
+        let workspaces = state.workspaces.lock().await;
+        workspaces
+            .get(&workspace_id)
+            .cloned()
+            .ok_or("workspace not found")?
+    };
 
     let repo_root = resolve_git_root(&entry)?;
-    run_git_command(&repo_root, &["add", "--", &path]).await
+    // If libgit2 reports a rename, we want a single UI action to stage both the
+    // old + new paths so the change actually moves to the staged section.
+    for path in action_paths_for_file(&repo_root, &path) {
+        run_git_command(&repo_root, &["add", "-A", "--", &path]).await?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -464,11 +569,13 @@ pub(crate) async fn stage_git_all(
     workspace_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let workspaces = state.workspaces.lock().await;
-    let entry = workspaces
-        .get(&workspace_id)
-        .ok_or("workspace not found")?
-        .clone();
+    let entry = {
+        let workspaces = state.workspaces.lock().await;
+        workspaces
+            .get(&workspace_id)
+            .cloned()
+            .ok_or("workspace not found")?
+    };
 
     let repo_root = resolve_git_root(&entry)?;
     run_git_command(&repo_root, &["add", "-A"]).await
@@ -480,14 +587,19 @@ pub(crate) async fn unstage_git_file(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let workspaces = state.workspaces.lock().await;
-    let entry = workspaces
-        .get(&workspace_id)
-        .ok_or("workspace not found")?
-        .clone();
+    let entry = {
+        let workspaces = state.workspaces.lock().await;
+        workspaces
+            .get(&workspace_id)
+            .cloned()
+            .ok_or("workspace not found")?
+    };
 
     let repo_root = resolve_git_root(&entry)?;
-    run_git_command(&repo_root, &["restore", "--staged", "--", &path]).await
+    for path in action_paths_for_file(&repo_root, &path) {
+        run_git_command(&repo_root, &["restore", "--staged", "--", &path]).await?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -496,20 +608,28 @@ pub(crate) async fn revert_git_file(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let workspaces = state.workspaces.lock().await;
-    let entry = workspaces
-        .get(&workspace_id)
-        .ok_or("workspace not found")?
-        .clone();
+    let entry = {
+        let workspaces = state.workspaces.lock().await;
+        workspaces
+            .get(&workspace_id)
+            .cloned()
+            .ok_or("workspace not found")?
+    };
 
     let repo_root = resolve_git_root(&entry)?;
-    if run_git_command(&repo_root, &["restore", "--staged", "--worktree", "--", &path])
+    for path in action_paths_for_file(&repo_root, &path) {
+        if run_git_command(
+            &repo_root,
+            &["restore", "--staged", "--worktree", "--", &path],
+        )
         .await
         .is_ok()
-    {
-        return Ok(());
+        {
+            continue;
+        }
+        run_git_command(&repo_root, &["clean", "-f", "--", &path]).await?;
     }
-    run_git_command(&repo_root, &["clean", "-f", "--", &path]).await
+    Ok(())
 }
 
 #[tauri::command]
@@ -634,57 +754,113 @@ pub(crate) async fn get_git_diffs(
         .clone();
 
     let repo_root = resolve_git_root(&entry)?;
-    let repo = Repository::open(&repo_root).map_err(|e| e.to_string())?;
-    let head_tree = repo
-        .head()
-        .ok()
-        .and_then(|head| head.peel_to_tree().ok());
+    tokio::task::spawn_blocking(move || {
+        let repo = Repository::open(&repo_root).map_err(|e| e.to_string())?;
+        let head_tree = repo
+            .head()
+            .ok()
+            .and_then(|head| head.peel_to_tree().ok());
 
-    let mut options = DiffOptions::new();
-    options
-        .include_untracked(true)
-        .recurse_untracked_dirs(true)
-        .show_untracked_content(true);
+        let mut options = DiffOptions::new();
+        options
+            .include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .show_untracked_content(true);
 
-    let diff = match head_tree.as_ref() {
-        Some(tree) => repo
-            .diff_tree_to_workdir_with_index(Some(tree), Some(&mut options))
-            .map_err(|e| e.to_string())?,
-        None => repo
-            .diff_tree_to_workdir_with_index(None, Some(&mut options))
-            .map_err(|e| e.to_string())?,
-    };
+        let diff = match head_tree.as_ref() {
+            Some(tree) => repo
+                .diff_tree_to_workdir_with_index(Some(tree), Some(&mut options))
+                .map_err(|e| e.to_string())?,
+            None => repo
+                .diff_tree_to_workdir_with_index(None, Some(&mut options))
+                .map_err(|e| e.to_string())?,
+        };
 
-    let mut results = Vec::new();
-    for (index, delta) in diff.deltas().enumerate() {
-        let path = delta
-            .new_file()
-            .path()
-            .or_else(|| delta.old_file().path());
-        let Some(path) = path else {
-            continue;
-        };
-        let patch = match git2::Patch::from_diff(&diff, index) {
-            Ok(patch) => patch,
-            Err(_) => continue,
-        };
-        let Some(mut patch) = patch else {
-            continue;
-        };
-        let content = match diff_patch_to_string(&mut patch) {
-            Ok(content) => content,
-            Err(_) => continue,
-        };
-        if content.trim().is_empty() {
-            continue;
+        let mut results = Vec::new();
+        for (index, delta) in diff.deltas().enumerate() {
+            let old_path = delta.old_file().path();
+            let new_path = delta.new_file().path();
+            let display_path = new_path.or(old_path);
+            let Some(display_path) = display_path else {
+                continue;
+            };
+            let old_path_str = old_path.map(|path| path.to_string_lossy());
+            let new_path_str = new_path.map(|path| path.to_string_lossy());
+            let display_path_str = display_path.to_string_lossy();
+            let normalized_path = normalize_git_path(&display_path_str);
+            let old_image_mime = old_path_str.as_deref().and_then(image_mime_type);
+            let new_image_mime = new_path_str.as_deref().and_then(image_mime_type);
+            let is_image = old_image_mime.is_some() || new_image_mime.is_some();
+
+            if is_image {
+                let is_deleted = delta.status() == git2::Delta::Deleted;
+                let is_added = delta.status() == git2::Delta::Added;
+
+                let old_image_data = if !is_added && old_image_mime.is_some() {
+                    head_tree
+                        .as_ref()
+                        .and_then(|tree| old_path.and_then(|path| tree.get_path(path).ok()))
+                        .and_then(|entry| repo.find_blob(entry.id()).ok())
+                        .and_then(blob_to_base64)
+                } else {
+                    None
+                };
+
+                let new_image_data = if !is_deleted && new_image_mime.is_some() {
+                    match new_path {
+                        Some(path) => {
+                            let full_path = repo_root.join(path);
+                            read_image_base64(&full_path)
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+
+                results.push(GitFileDiff {
+                    path: normalized_path,
+                    diff: String::new(),
+                    is_binary: true,
+                    is_image: true,
+                    old_image_data,
+                    new_image_data,
+                    old_image_mime: old_image_mime.map(str::to_string),
+                    new_image_mime: new_image_mime.map(str::to_string),
+                });
+                continue;
+            }
+
+            let patch = match git2::Patch::from_diff(&diff, index) {
+                Ok(patch) => patch,
+                Err(_) => continue,
+            };
+            let Some(mut patch) = patch else {
+                continue;
+            };
+            let content = match diff_patch_to_string(&mut patch) {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+            if content.trim().is_empty() {
+                continue;
+            }
+            results.push(GitFileDiff {
+                path: normalized_path,
+                diff: content,
+                is_binary: false,
+                is_image: false,
+                old_image_data: None,
+                new_image_data: None,
+                old_image_mime: None,
+                new_image_mime: None,
+            });
         }
-        results.push(GitFileDiff {
-            path: normalize_git_path(path.to_string_lossy().as_ref()),
-            diff: content,
-        });
-    }
 
-    Ok(results)
+        Ok(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -698,6 +874,7 @@ pub(crate) async fn get_git_log(
         .get(&workspace_id)
         .ok_or("workspace not found")?
         .clone();
+    drop(workspaces);
 
     let repo_root = resolve_git_root(&entry)?;
     let repo = Repository::open(&repo_root).map_err(|e| e.to_string())?;
@@ -824,13 +1001,57 @@ pub(crate) async fn get_git_commit_diff(
 
     let mut results = Vec::new();
     for (index, delta) in diff.deltas().enumerate() {
-        let path = delta
-            .new_file()
-            .path()
-            .or_else(|| delta.old_file().path());
-        let Some(path) = path else {
+        let old_path = delta.old_file().path();
+        let new_path = delta.new_file().path();
+        let display_path = new_path.or(old_path);
+        let Some(display_path) = display_path else {
             continue;
         };
+        let old_path_str = old_path.map(|path| path.to_string_lossy());
+        let new_path_str = new_path.map(|path| path.to_string_lossy());
+        let display_path_str = display_path.to_string_lossy();
+        let normalized_path = normalize_git_path(&display_path_str);
+        let old_image_mime = old_path_str.as_deref().and_then(image_mime_type);
+        let new_image_mime = new_path_str.as_deref().and_then(image_mime_type);
+        let is_image = old_image_mime.is_some() || new_image_mime.is_some();
+
+        if is_image {
+            let is_deleted = delta.status() == git2::Delta::Deleted;
+            let is_added = delta.status() == git2::Delta::Added;
+
+            let old_image_data = if !is_added && old_image_mime.is_some() {
+                parent_tree
+                    .as_ref()
+                    .and_then(|tree| old_path.and_then(|path| tree.get_path(path).ok()))
+                    .and_then(|entry| repo.find_blob(entry.id()).ok())
+                    .and_then(blob_to_base64)
+            } else {
+                None
+            };
+
+            let new_image_data = if !is_deleted && new_image_mime.is_some() {
+                new_path
+                    .and_then(|path| commit_tree.get_path(path).ok())
+                    .and_then(|entry| repo.find_blob(entry.id()).ok())
+                    .and_then(blob_to_base64)
+            } else {
+                None
+            };
+
+            results.push(GitCommitDiff {
+                path: normalized_path,
+                status: status_for_delta(delta.status()).to_string(),
+                diff: String::new(),
+                is_binary: true,
+                is_image: true,
+                old_image_data,
+                new_image_data,
+                old_image_mime: old_image_mime.map(str::to_string),
+                new_image_mime: new_image_mime.map(str::to_string),
+            });
+            continue;
+        }
+
         let patch = match git2::Patch::from_diff(&diff, index) {
             Ok(patch) => patch,
             Err(_) => continue,
@@ -846,9 +1067,15 @@ pub(crate) async fn get_git_commit_diff(
             continue;
         }
         results.push(GitCommitDiff {
-            path: normalize_git_path(path.to_string_lossy().as_ref()),
+            path: normalized_path,
             status: status_for_delta(delta.status()).to_string(),
             diff: content,
+            is_binary: false,
+            is_image: false,
+            old_image_data: None,
+            new_image_data: None,
+            old_image_mime: None,
+            new_image_mime: None,
         });
     }
 
@@ -1233,5 +1460,37 @@ mod tests {
         let diff = collect_workspace_diff(&root).expect("collect diff");
         assert!(diff.contains("unstaged.txt"));
         assert!(diff.contains("unstaged"));
+    }
+
+    #[test]
+    fn action_paths_for_file_expands_renames() {
+        let (root, repo) = create_temp_repo();
+        fs::write(root.join("a.txt"), "hello\n").expect("write file");
+
+        let mut index = repo.index().expect("repo index");
+        index
+            .add_path(Path::new("a.txt"))
+            .expect("add path");
+        let tree_id = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_id).expect("find tree");
+        let sig =
+            git2::Signature::now("Test", "test@example.com").expect("signature");
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .expect("commit");
+
+        fs::rename(root.join("a.txt"), root.join("b.txt")).expect("rename file");
+
+        // Stage the rename so libgit2 reports it as an INDEX_RENAMED entry.
+        let mut index = repo.index().expect("repo index");
+        index
+            .remove_path(Path::new("a.txt"))
+            .expect("remove old path");
+        index
+            .add_path(Path::new("b.txt"))
+            .expect("add new path");
+        index.write().expect("write index");
+
+        let paths = action_paths_for_file(&root, "b.txt");
+        assert_eq!(paths, vec!["a.txt".to_string(), "b.txt".to_string()]);
     }
 }
